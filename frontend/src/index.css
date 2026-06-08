@@ -1,3 +1,37 @@
+/*
+ * index.css — Global Stylesheet
+ * ================================
+ * This file is imported once in main.jsx and applies styles to the entire app.
+ *
+ * Structure:
+ *   1. @tailwind directives   — injects Tailwind's generated CSS
+ *   2. :root variables        — legacy CSS custom properties (from the original scaffold)
+ *   3. body / #root overrides — layout resets for the HRMS full-screen app shell
+ *   4. Heading / typography   — base heading sizes (used by static pages, not HRMS modules)
+ *
+ * Important: the HRMS design system (colours, shadows, component styles) is
+ * defined inside the GS component in HRModules.jsx, NOT here. That keeps all
+ * HRMS styles co-located with the React components that use them. This file
+ * only handles the Tailwind injection and the outer HTML/body/root shell.
+ *
+ * @tailwind directives (lines 1-3):
+ *   Tailwind's PostCSS plugin replaces these with the actual generated CSS.
+ *   - @tailwind base        → normalises browser defaults (box-sizing, margins, etc.)
+ *   - @tailwind components  → registers component-layer classes (none defined here)
+ *   - @tailwind utilities   → injects all utility classes (flex, text-blue-600, etc.)
+ *   Only classes actually used in source files (per tailwind.config.js content paths)
+ *   are included — unused utilities are tree-shaken away in production builds.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Legacy CSS variables from the Vite scaffold.
+ * These are NOT used by the HRMS modules (which use GS's own --ink / --accent
+ * variables). They're kept here in case CountryView.jsx or bio.jsx reference them.
+ */
 :root {
   --text: #6b6375;
   --text-h: #08060d;
@@ -52,14 +86,15 @@
 
 body {
   margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 #root {
-  width: 1126px;
+  width: 100%;
   max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
+  margin: 0;
+  text-align: left;
   min-height: 100svh;
   display: flex;
   flex-direction: column;
