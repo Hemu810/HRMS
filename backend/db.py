@@ -90,6 +90,13 @@ IS_SQLITE = settings.database_url.startswith("sqlite")
 # pool_pre_ping=True sends a lightweight "SELECT 1" before each connection is
 # used — catches stale/dropped connections from the pool before a real query
 # hits them. Disabled for SQLite because it doesn't need connection pooling.
+_pool_kwargs = {} if IS_SQLITE else {
+    "pool_size": 5,
+    "max_overflow": 10,
+    "pool_timeout": 30,
+    "pool_recycle": 1800,   # recycle connections after 30 min to avoid MSSQL TCP timeouts
+}
+
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=not IS_SQLITE,
@@ -97,6 +104,7 @@ engine = create_engine(
     # SQLite requires check_same_thread=False so the same connection can be
     # reused across FastAPI's async worker threads.
     connect_args={"check_same_thread": False} if IS_SQLITE else {},
+    **_pool_kwargs,
 )
 
 # MetaData holds all table definitions in memory so create_all() can create
@@ -414,6 +422,59 @@ documents_table = Table(
     Column("created_at",    DateTime,    nullable=False, default=datetime.utcnow),
 )
 
+# payroll_statutory_config_table — DB-driven statutory deduction rates.
+# Replaces all hardcoded PF/ESI/PT/TDS constants in the frontend.
+# key values and their meanings:
+#   pf_rate_employee    — employee PF contribution as decimal (e.g. 0.12 = 12%)
+#   pf_rate_employer    — employer PF contribution as decimal
+#   pf_ceiling          — monthly basic salary cap for PF calculation (₹)
+#   esi_rate_employee   — employee ESI rate as decimal (e.g. 0.0075 = 0.75%)
+#   esi_rate_employer   — employer ESI rate as decimal
+#   esi_gross_limit     — max gross salary eligible for ESI (₹)
+#   pt_slab_json        — JSON array of {min, max, pt} slabs for Professional Tax
+#   tds_slab_json       — JSON array of {min, max, rate} slabs for Income Tax (New Regime)
+#   tds_cess_rate       — Health & Education cess rate as decimal (e.g. 0.04 = 4%)
+#   tds_80c_limit       — Section 80C deduction limit (₹) for TDS calculation
+#   tds_standard_deduction — Standard deduction amount (₹) for salaried employees
+payroll_statutory_config_table = Table(
+    "payroll_statutory_config",
+    metadata,
+    Column("id",          BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
+    Column("config_key",  String(60),   nullable=False, unique=True),
+    Column("label",       String(200),  nullable=False),
+    Column("value",       String(500),  nullable=False),   # numeric value OR JSON string for slabs
+    Column("description", String(500),  nullable=True),
+    Column("updated_by",  String(20),   ForeignKey("employees.employee_id"), nullable=True),
+    Column("updated_at",  DateTime,     nullable=False, default=datetime.utcnow),
+)
+
+# Default statutory config values seeded on first run.
+# Tuple: (config_key, label, value, description)
+STATUTORY_CONFIG_DEFAULTS = [
+    ("pf_rate_employee",        "PF Employee Rate",             "0.12",
+     "Employee PF contribution: 12% of basic salary (capped at PF ceiling)"),
+    ("pf_rate_employer",        "PF Employer Rate",             "0.12",
+     "Employer PF contribution: 12% of basic salary (capped at PF ceiling)"),
+    ("pf_ceiling",              "PF Wage Ceiling (₹/month)",    "15000",
+     "PF is calculated on min(basic, ceiling). Currently ₹15,000 as per EPFO."),
+    ("esi_rate_employee",       "ESI Employee Rate",            "0.0075",
+     "Employee ESI contribution: 0.75% of gross salary"),
+    ("esi_rate_employer",       "ESI Employer Rate",            "0.0325",
+     "Employer ESI contribution: 3.25% of gross salary"),
+    ("esi_gross_limit",         "ESI Gross Salary Limit (₹)",   "21000",
+     "ESI applies only when monthly gross ≤ this limit. Currently ₹21,000."),
+    ("pt_slab_json",            "Professional Tax Slabs (JSON)","[{\"min\":0,\"max\":10000,\"pt\":0},{\"min\":10001,\"max\":15000,\"pt\":150},{\"min\":15001,\"max\":999999999,\"pt\":200}]",
+     "Karnataka PT schedule. Array of {min, max, pt} objects. Adjust for your state."),
+    ("tds_slab_json",           "Income Tax Slabs New Regime (JSON)","[{\"min\":0,\"max\":250000,\"rate\":0},{\"min\":250001,\"max\":500000,\"rate\":0.05},{\"min\":500001,\"max\":750000,\"rate\":0.10},{\"min\":750001,\"max\":1000000,\"rate\":0.15},{\"min\":1000001,\"max\":1250000,\"rate\":0.20},{\"min\":1250001,\"max\":1500000,\"rate\":0.25},{\"min\":1500001,\"max\":999999999,\"rate\":0.30}]",
+     "New Regime income tax slabs (Section 115BAC, FY 2024-25). Array of {min, max, rate}."),
+    ("tds_cess_rate",           "Health & Education Cess Rate", "0.04",
+     "4% cess applied on top of computed income tax."),
+    ("tds_80c_limit",           "Section 80C Limit (₹)",        "150000",
+     "Maximum annual 80C deduction (PF contributions counted towards this)."),
+    ("tds_standard_deduction",  "Standard Deduction (₹)",       "50000",
+     "Annual standard deduction for salaried employees under the New Regime."),
+]
+
 # Default leave type allocations seeded for every new employee.
 LEAVE_TYPES_DEFAULT = [
     ("Earned Leave",        21, "#1B45F5"),
@@ -422,6 +483,22 @@ LEAVE_TYPES_DEFAULT = [
     ("Maternity/Paternity",  0, "#B06010"),
     ("Compensatory Off",     5, "#0A7E7A"),
 ]
+
+
+# notifications_table — in-app alerts sent to HR/Director when leave or
+# attendance correction requests are submitted.
+notifications_table = Table(
+    "notifications",
+    metadata,
+    Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
+    Column("recipient_id", String(20), nullable=False),
+    Column("type",         String(40),  nullable=False),   # leave_request | attendance_correction
+    Column("title",        String(200), nullable=False),
+    Column("message",      String(500), nullable=False),
+    Column("ref_id",       Integer,     nullable=True),    # FK to the originating request row
+    Column("is_read",      Boolean,     nullable=False, default=False),
+    Column("created_at",   DateTime,    nullable=False, default=datetime.utcnow),
+)
 
 
 # ── Serialisation helpers ─────────────────────────────────────────────────────
@@ -444,6 +521,16 @@ def rows_to_dicts(result):
     return [{k: serialize(v) for k, v in row._mapping.items()} for row in result]
 
 
+# ── Index helpers ─────────────────────────────────────────────────────────────
+
+def _idx(conn, name: str, table: str, cols: str) -> None:
+    """Creates an index idempotently (catches 'already exists' from any dialect)."""
+    try:
+        conn.execute(text(f"CREATE INDEX {name} ON {table} ({cols})"))
+    except Exception:
+        pass
+
+
 # ── Database initialisation ───────────────────────────────────────────────────
 
 def init_database():
@@ -455,13 +542,35 @@ def init_database():
     """
     metadata.create_all(engine, checkfirst=True)
 
-    # Safe migration: add recovery_email column to employees if it doesn't exist yet.
-    # SQLite doesn't support IF NOT EXISTS for ADD COLUMN, so we catch the error silently.
-    with engine.begin() as _conn:
-        try:
-            _conn.execute(text("ALTER TABLE employees ADD COLUMN recovery_email VARCHAR(200)"))
-        except Exception:
-            pass  # Column already exists — no action needed.
+    # Add indexes for every hot query path. _idx() is idempotent — safe to call on
+    # every startup; the database ignores duplicates via the caught exception.
+    # DDL (CREATE INDEX) must run outside an explicit transaction on MSSQL because
+    # SQL Server auto-commits DDL internally, leaving no open transaction for
+    # SQLAlchemy's engine.begin() to commit.  AUTOCOMMIT mode works on all dialects.
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as _ic:
+        _idx(_ic, "ix_att_emp_date",    "attendance",              "employee_id, date")
+        _idx(_ic, "ix_att_date",        "attendance",              "date")
+        _idx(_ic, "ix_cor_emp",         "attendance_corrections",  "employee_id")
+        _idx(_ic, "ix_cor_status",      "attendance_corrections",  "status")
+        _idx(_ic, "ix_lr_emp",          "leave_requests",          "employee_id")
+        _idx(_ic, "ix_lr_status",       "leave_requests",          "status")
+        _idx(_ic, "ix_lb_emp_fy",       "leave_balances",          "employee_id, fiscal_year")
+        _idx(_ic, "ix_tle_emp_wk",      "time_log_entries",        "employee_id, week_key")
+        _idx(_ic, "ix_ts_emp_wk",       "timesheets",              "employee_id, week_key")
+        _idx(_ic, "ix_ts_status",       "timesheets",              "status")
+        _idx(_ic, "ix_pli_emp_month",   "payslip_line_items",      "employee_id, payroll_month")
+        _idx(_ic, "ix_notif_recip",     "notifications",           "recipient_id, is_read")
+        _idx(_ic, "ix_doc_emp",         "documents",               "employee_id")
+        _idx(_ic, "ix_emp_mgr",         "employees",               "mgr_id")
+
+    # SQLite-only migration: add recovery_email if it was created before this column existed.
+    # MSSQL schema already includes this column, so skip it there.
+    if IS_SQLITE:
+        with engine.begin() as _conn:
+            try:
+                _conn.execute(text("ALTER TABLE employees ADD COLUMN recovery_email VARCHAR(200)"))
+            except Exception:
+                pass
 
     now = datetime.utcnow()
     with engine.begin() as conn:
@@ -471,6 +580,18 @@ def init_database():
                 conn.execute(insert(payroll_structure_table).values(
                     component_key=key, label=label, calc_type=calc_type,
                     value=value, description=desc, updated_at=now,
+                ))
+        # Seed statutory deduction config (PF/ESI/PT/TDS rates) if not already present.
+        for config_key, label, value, desc in STATUTORY_CONFIG_DEFAULTS:
+            already = conn.execute(
+                select(payroll_statutory_config_table.c.id).where(
+                    payroll_statutory_config_table.c.config_key == config_key
+                )
+            ).first()
+            if not already:
+                conn.execute(insert(payroll_statutory_config_table).values(
+                    config_key=config_key, label=label, value=value,
+                    description=desc, updated_at=now,
                 ))
         # Seed default leave balances for any employee that doesn't have them yet.
         today = date.today()
@@ -567,12 +688,9 @@ def fetch_all_employees_full():
 
 def verify_login(email, password):
     """
-    Looks up the employee by email (case-insensitive, trimmed), verifies the
-    password against the stored PBKDF2 hash, and returns the full employee
-    dict (same shape as fetch_all_employees_full) on success, or None on failure.
-
-    We re-use fetch_all_employees_full() so the returned object is identical to
-    what AppBootstrap loaded into ALL_USERS — no shape mismatch risk.
+    Looks up the employee by email, verifies the PBKDF2 hash, and returns the
+    full frontend-shaped dict — same shape as fetch_all_employees_full entries.
+    Builds the dict from two small queries instead of loading the entire table.
     """
     with engine.begin() as conn:
         row = conn.execute(
@@ -583,8 +701,38 @@ def verify_login(email, password):
     emp = dict(row._mapping)
     if not verify_password(password, emp["password_hash"]):
         return None
-    all_emps = fetch_all_employees_full()
-    return next((u for u in all_emps if u["id"] == emp["employee_id"]), None)
+    # Fetch only the direct-report IDs for this manager — avoids loading all employees.
+    with engine.begin() as conn:
+        report_rows = conn.execute(
+            select(employees_table.c.employee_id).where(
+                employees_table.c.mgr_id == emp["employee_id"]
+            )
+        ).fetchall()
+    reports = [r._mapping["employee_id"] for r in report_rows]
+    dob = emp.get("dob")
+    joining = emp.get("date_of_joining")
+    return {
+        "id": emp["employee_id"], "firstName": emp["first_name"],
+        "middleName": emp.get("middle_name") or "", "lastName": emp["last_name"],
+        "name": emp["full_name"], "dept": emp["department"], "role": emp["designation"],
+        "accessLevel": emp["access_level"], "ctcLPA": float(emp["annual_ctc_lpa"]),
+        "joining": joining.isoformat() if joining else None,
+        "color": emp.get("color") or "#1B45F5",
+        "mgr": emp.get("mgr_id"), "reports": reports,
+        "loc": emp.get("location") or "", "email": emp["email"],
+        "phone": emp.get("phone") or "",
+        "perf": float(emp["perf_score"]) if emp.get("perf_score") else 0,
+        "dob": dob.isoformat() if dob else None,
+        "age": _calc_age(dob), "gender": emp.get("gender") or "",
+        "aadhaar": emp.get("aadhaar") or "", "pan": emp.get("pan") or "",
+        "empType": emp.get("emp_type") or "Full-time",
+        "noticePeriod": emp.get("notice_period") or "",
+        "bank": emp.get("bank_name") or "", "accountNo": emp.get("bank_account_no") or "",
+        "ifsc": emp.get("ifsc") or "", "uan": emp.get("uan") or "",
+        "pfAccount": emp.get("pf_account") or "", "esic": emp.get("esic") or "",
+        "isHR": bool(emp.get("is_hr")), "skills": [],
+        "recoveryEmail": emp.get("recovery_email") or "",
+    }
 
 
 def fetch_employees():
@@ -1443,3 +1591,85 @@ def delete_document(doc_id: int):
     with engine.begin() as conn:
         conn.execute(sql_delete(documents_table).where(documents_table.c.id == doc_id))
     return doc["stored_name"]
+
+
+# ── Statutory config queries ──────────────────────────────────────────────────
+
+def fetch_statutory_config():
+    """Returns all statutory deduction config rows as a list of dicts."""
+    with engine.begin() as conn:
+        rows = conn.execute(
+            select(payroll_statutory_config_table).order_by(payroll_statutory_config_table.c.id)
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def update_statutory_config(config_key: str, value: str, updated_by: str = None):
+    """Updates a single statutory config value. Returns True on success."""
+    with engine.begin() as conn:
+        result = conn.execute(
+            update(payroll_statutory_config_table)
+            .where(payroll_statutory_config_table.c.config_key == config_key)
+            .values(value=value, updated_by=updated_by, updated_at=datetime.utcnow())
+        )
+    return result.rowcount > 0
+
+
+# ── Notification queries ──────────────────────────────────────────────────────
+
+def _get_hr_recipient_ids() -> list[str]:
+    """Returns employee_ids of all active HR/Director users."""
+    with engine.begin() as conn:
+        rows = conn.execute(
+            select(employees_table.c.employee_id).where(
+                (employees_table.c.is_active == True) &
+                ((employees_table.c.is_hr == True) | (employees_table.c.access_level >= 4))
+            )
+        ).fetchall()
+    return [r._mapping["employee_id"] for r in rows]
+
+
+def create_notifications_for_hr(type_: str, title: str, message: str, ref_id: int = None):
+    """Creates a notification row for every active HR/Director employee."""
+    now = datetime.utcnow()
+    for emp_id in _get_hr_recipient_ids():
+        with engine.begin() as conn:
+            conn.execute(insert(notifications_table).values(
+                recipient_id=emp_id, type=type_, title=title,
+                message=message, ref_id=ref_id, is_read=False, created_at=now,
+            ))
+
+
+def fetch_notifications(recipient_id: str):
+    """Returns the 50 most recent notifications for a recipient, newest first."""
+    with engine.begin() as conn:
+        rows = conn.execute(
+            select(notifications_table)
+            .where(notifications_table.c.recipient_id == recipient_id)
+            .order_by(desc(notifications_table.c.created_at))
+            .limit(50)
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def mark_notification_read(notif_id: int):
+    """Marks a single notification as read."""
+    with engine.begin() as conn:
+        conn.execute(
+            update(notifications_table)
+            .where(notifications_table.c.id == notif_id)
+            .values(is_read=True)
+        )
+
+
+def mark_all_notifications_read(recipient_id: str):
+    """Marks all unread notifications as read for a recipient."""
+    with engine.begin() as conn:
+        conn.execute(
+            update(notifications_table)
+            .where(
+                (notifications_table.c.recipient_id == recipient_id) &
+                (notifications_table.c.is_read == False)
+            )
+            .values(is_read=True)
+        )

@@ -16,6 +16,7 @@ mutation at runtime — treat them as read-only constants.
 
 from dataclasses import dataclass
 import os
+from urllib.parse import quote
 
 from env import load_env_file
 
@@ -24,42 +25,41 @@ from env import load_env_file
 load_env_file()
 
 
+def _build_database_url() -> str:
+    # If a full DATABASE_URL is explicitly provided, use it as-is.
+    if os.getenv("DATABASE_URL"):
+        return os.getenv("DATABASE_URL")
+
+    # If the individual DB_* vars are set, build a pymssql URL (no ODBC driver needed).
+    server = os.getenv("DB_SERVER")
+    if server:
+        db   = os.getenv("DB_DATABASE", "")
+        user = os.getenv("DB_USERNAME", "")
+        pwd  = os.getenv("DB_PASSWORD", "")
+        return f"mssql+pymssql://{quote(user)}:{quote(pwd)}@{server}/{db}"
+
+    # Local dev fallback — SQLite file in the backend/ directory.
+    return "sqlite:///./doloxe_hrms_dev.db"
+
+
+def _port() -> int:
+    # IIS HttpPlatformHandler injects HTTP_PLATFORM_PORT; fall back to PORT, then 4000.
+    return int(os.getenv("PORT") or os.getenv("HTTP_PLATFORM_PORT") or "4000")
+
+
 @dataclass(frozen=True)
 class Settings:
-    # Server bind address and port.
-    # "0.0.0.0" means listen on all network interfaces (required for Docker/cloud).
     host: str = os.getenv("HOST", "0.0.0.0")
-    port: int = int(os.getenv("PORT", "4000"))
-
-    # reload=True enables Uvicorn hot-reload in development (watches for file changes).
-    # Always False in production to avoid performance overhead.
+    port: int = _port()
     reload: bool = os.getenv("RELOAD", "false").lower() == "true"
-
-    # The React frontend origin that's allowed to make cross-origin requests.
-    # In dev: http://localhost:5173 (Vite default).
-    # In prod: set to your deployed frontend URL.
     frontend_origin: str = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+    database_url: str = _build_database_url()
 
-    # SQLAlchemy connection string.
-    # Default is a local SQLite file (zero-config for local dev).
-    # For production use a full connection string, e.g.:
-    #   mssql+pyodbc://user:pass@server/db?driver=ODBC+Driver+18+for+SQL+Server
-    #   postgresql+psycopg2://user:pass@host/db
-    database_url: str = os.getenv(
-        "DATABASE_URL",
-        "sqlite:///./doloxe_hrms_dev.db",
-    )
-
-    # SMTP settings for payslip email delivery.
-    # smtp_secure=True uses SMTP_SSL (port 465); False uses STARTTLS (port 587).
-    # Leave smtp_user / smtp_pass / smtp_from empty to disable email sending
-    # (the mailer will raise a RuntimeError if you attempt to send without them).
     smtp_host: str   = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port: int   = int(os.getenv("SMTP_PORT", "465"))
     smtp_secure: bool = os.getenv("SMTP_SECURE", "true").lower() == "true"
     smtp_user: str   = os.getenv("SMTP_USER", "")
     smtp_pass: str   = os.getenv("SMTP_PASS", "")
-    # smtp_from defaults to smtp_user so you only need to set one env var for Gmail.
     smtp_from: str   = os.getenv("SMTP_FROM", os.getenv("SMTP_USER", ""))
 
 

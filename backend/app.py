@@ -21,6 +21,8 @@ from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -95,6 +97,14 @@ from db import (
     create_document,
     fetch_document_by_id,
     delete_document,
+    # statutory config
+    fetch_statutory_config,
+    update_statutory_config,
+    # notifications
+    create_notifications_for_hr,
+    fetch_notifications,
+    mark_notification_read,
+    mark_all_notifications_read,
     # init
     init_database,
 )
@@ -104,7 +114,12 @@ from schemas import EmailLogOut, LoginRequest, LoginResponse, PayslipEmailReques
 
 # ── App instance ──────────────────────────────────────────────────────────────
 # title and version appear in the auto-generated /docs Swagger UI.
-app = FastAPI(title="DOLOXE HRMS API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_database()
+    yield
+
+app = FastAPI(title="DOLOXE HRMS API", version="1.0.0", lifespan=lifespan)
 
 # ── CORS middleware ───────────────────────────────────────────────────────────
 # Browsers block cross-origin requests unless the server explicitly allows them.
@@ -120,14 +135,6 @@ app.add_middleware(
     allow_headers=["*"],   # allow Content-Type, Authorization, etc.
 )
 
-
-# ── Startup hook ──────────────────────────────────────────────────────────────
-# Runs once when the server starts. Creates all DB tables (if they don't exist
-# yet) and seeds the payroll structure defaults. Safe to re-run — uses
-# checkfirst=True inside init_database() so it never drops existing data.
-@app.on_event("startup")
-def startup():
-    init_database()
 
 
 # ── Health check ─────────────────────────────────────────────────────────────
@@ -423,6 +430,33 @@ def del_field_config(field_id: int):
     return {"ok": True}
 
 
+# ── Statutory deduction config endpoints ─────────────────────────────────────
+# PF, ESI, PT and TDS rates/slabs are stored in payroll_statutory_config so HR
+# can update them when legislation changes without touching code.
+
+@app.get("/api/payroll/statutory-config")
+def get_statutory_config():
+    """Returns all statutory config rows (PF/ESI/PT/TDS rates and slabs)."""
+    return {"statutoryConfig": fetch_statutory_config()}
+
+
+@app.put("/api/payroll/statutory-config/{config_key}")
+def put_statutory_config(config_key: str, payload: dict):
+    """
+    Updates a single statutory config value (HR/Director only via UI guard).
+    payload: { value: str, updatedBy: str }
+    For slab fields (pt_slab_json, tds_slab_json) value must be a JSON string.
+    """
+    value      = str(payload.get("value", "")).strip()
+    updated_by = payload.get("updatedBy")
+    if not value:
+        raise HTTPException(status_code=400, detail="value is required.")
+    ok = update_statutory_config(config_key, value, updated_by)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Config key not found.")
+    return {"ok": True}
+
+
 # ── Payslip Line Items endpoints ──────────────────────────────────────────────
 # Stores the computed payslip breakdown (each earning and deduction row) for a
 # given employee + month. The frontend saves these after running payroll so that
@@ -558,6 +592,12 @@ def post_correction(payload: dict):
             corr_date=corr_date,
             reason=payload["reason"],
         )
+        create_notifications_for_hr(
+            type_="attendance_correction",
+            title="Attendance Correction Request",
+            message=f"{payload['empName']} requested a missed-punch correction for {payload['date']}",
+            ref_id=rec["id"],
+        )
         return {"ok": True, "correction": rec}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -637,6 +677,14 @@ def post_leave(payload: dict):
         if status == "approved":
             increment_leave_used(payload["employeeId"], payload["leaveType"],
                                  int(payload.get("days", 1)), fiscal_year)
+        # Notify HR/Directors only for pending requests.
+        if status == "pending":
+            create_notifications_for_hr(
+                type_="leave_request",
+                title="New Leave Request",
+                message=f"{payload['empName']} applied for {payload['leaveType']} ({payload['fromDate']} → {payload['toDate']}, {payload.get('days',1)} day(s))",
+                ref_id=req["id"],
+            )
         return {"ok": True, "leaveRequest": req}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -890,6 +938,28 @@ def remove_document(doc_id: int):
     file_path = UPLOADS_DIR / stored_name
     if file_path.exists():
         file_path.unlink()
+    return {"ok": True}
+
+
+# ── Notification endpoints ────────────────────────────────────────────────────
+
+@app.get("/api/notifications")
+def get_notifications(recipient_id: str = Query(...)):
+    """Returns the 50 most recent notifications for a recipient (HR/Director)."""
+    return {"notifications": fetch_notifications(recipient_id)}
+
+
+@app.put("/api/notifications/read-all")
+def read_all_notifs(recipient_id: str = Query(...)):
+    """Marks all notifications as read for a recipient."""
+    mark_all_notifications_read(recipient_id)
+    return {"ok": True}
+
+
+@app.put("/api/notifications/{notif_id}/read")
+def read_notif(notif_id: int):
+    """Marks a single notification as read."""
+    mark_notification_read(notif_id)
     return {"ok": True}
 
 

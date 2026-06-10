@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // ─── GLOBAL STYLES ────────────────────────────────────────────────────────────
 // GS injects the design-system CSS once into the DOM as a <style> tag.
@@ -7,7 +7,7 @@ import { useState, useEffect } from "react";
 // colour, radius, shadow and spacing value used across all modules.
 const GS = () => (
   <style>{`
-    @import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+    /* Google Fonts are loaded via <link> in index.html — no @import needed here */
 
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -269,8 +269,8 @@ const GS = () => (
       border: 1.5px solid var(--brd); background: var(--surface); color: var(--ink2);
       font-family: var(--font); font-size: 12.5px; font-weight: 600;
       padding: 6px 13px; border-radius: var(--r8);
-      cursor: pointer; transition: all 0.12s; white-space: nowrap;
-      box-shadow: var(--shadow-xs);
+      cursor: pointer; transition: background 0.1s, border-color 0.1s, box-shadow 0.1s, transform 0.1s; white-space: nowrap;
+      box-shadow: var(--shadow-xs); will-change: transform;
     }
     .btn:hover { background: var(--raised); border-color: var(--brd2); color: var(--ink); }
     .btn:active { transform: translateY(1px); box-shadow: none; }
@@ -361,6 +361,7 @@ const GS = () => (
       width: 520px; max-width: 96vw; max-height: 88vh;
       display: flex; flex-direction: column;
       animation: moup 0.22s var(--ease);
+      will-change: transform, opacity;
     }
     .modal-w { width: 720px; }
     @keyframes moup { from { transform: translateY(22px) scale(0.95); opacity: 0 } to { transform: none; opacity: 1 } }
@@ -640,14 +641,14 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 // These three globals are populated once by AppBootstrap on first render.
 // Using module-level lets (not React state) avoids prop-drilling them through
 // every component — they're effectively read-only after the bootstrap phase.
-// These three globals survive Vite HMR module re-evaluation by being cached on
-// window. Without this, any saved code change resets ALL_USERS → [] which
-// makes every component that reads ALL_USERS (org chart, directory, etc.) appear
-// empty until the user manually hard-reloads. On a real production build there
-// is no HMR, so the window cache is set once and never read again.
-let ALL_USERS        = window.__HR_ALL_USERS__        || [];
-let APP_STRUCTURE    = window.__HR_APP_STRUCTURE__    || null;
-let APP_CUSTOM_FIELDS= window.__HR_APP_CUSTOM_FIELDS__|| [];
+// These globals survive Vite HMR module re-evaluation by being cached on window.
+// Without this, any saved code change resets them to empty which makes all
+// components appear broken until a hard reload. On a production build there is
+// no HMR so the window cache is set once and never read again.
+let ALL_USERS           = window.__HR_ALL_USERS__           || [];
+let APP_STRUCTURE       = window.__HR_APP_STRUCTURE__       || null;
+let APP_CUSTOM_FIELDS   = window.__HR_APP_CUSTOM_FIELDS__   || [];
+let APP_STATUTORY_CFG   = window.__HR_APP_STATUTORY_CFG__   || null;  // DB-driven PF/ESI/PT/TDS rates
 
 // Leave approval is role-based — no hardcoded employee IDs.
 // Director (accessLevel >= 4)  → their own leave is auto-approved
@@ -810,6 +811,14 @@ const AccessDenied = () => (
     <div style={{ fontSize:13, color:"var(--ink3)", maxWidth:300, margin:"0 auto" }}>You don't have permission to view this section.</div>
   </div>
 );
+
+// ─── TOPBAR CLOCK ─────────────────────────────────────────────────────────────
+// Isolated so its 1-second tick never re-renders the parent HRApp.
+const TopbarClock = () => {
+  const [t, setT] = useState(new Date());
+  useEffect(() => { const id = setInterval(() => setT(new Date()), 1000); return () => clearInterval(id); }, []);
+  return <div className="tb-clock">{t.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</div>;
+};
 
 // ─── LOGIN ─────────────────────────────────────────────────────────────────────
 const LoginScreen = ({ onLogin }) => {
@@ -1181,10 +1190,10 @@ const AttendanceMod = ({ currentUser }) => {
   const [corrError, setCorrError] = useState("");
   const [corrSaving, setCorrSaving] = useState(false);
 
-  const canViewTeam = hasTeamReports(currentUser);
+  const canViewTeam = hasTeamReports(currentUser) || canViewAttendanceReports(currentUser);
   const canViewReports = canViewAttendanceReports(currentUser);
   const canApproveAttendance = currentUser.isHR;
-  const teamEmps = canViewTeam ? getTeamEmps(currentUser) : [currentUser];
+  const teamEmps = canViewAttendanceReports(currentUser) ? ALL_USERS : (canViewTeam ? getTeamEmps(currentUser) : [currentUser]);
   const calendarEmps = canViewReports ? ALL_USERS : teamEmps;
   const myAtt = attendance[currentUser.id] || {};
   const selectedAtt = attendance[selEmpId] || {};
@@ -1318,6 +1327,11 @@ const AttendanceMod = ({ currentUser }) => {
     if (!canApproveAttendance) return;
     const req = corrections.find(r => r.id === requestId);
     if (!req) return;
+    setCorrections(prev => prev.map(r => r.id === requestId ? { ...r, status: "approved", actioned_by: currentUser.name } : r));
+    setAttendance(prev => ({
+      ...prev,
+      [req.employee_id || req.empId]: { ...(prev[req.employee_id || req.empId] || {}), [req.date]: "present" },
+    }));
     try {
       const res = await fetch(`${API_URL}/api/attendance/corrections/${requestId}/approve`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
@@ -1326,16 +1340,21 @@ const AttendanceMod = ({ currentUser }) => {
       const data = await res.json();
       if (res.ok) {
         setCorrections(prev => prev.map(r => r.id === requestId ? data.correction : r));
-        setAttendance(prev => ({
-          ...prev,
-          [req.employee_id || req.empId]: { ...(prev[req.employee_id || req.empId] || {}), [req.date]: "present" },
-        }));
+      } else {
+        setCorrections(prev => prev.map(r => r.id === requestId ? req : r));
+        setAttendance(prev => { const e = { ...(prev[req.employee_id || req.empId] || {}) }; delete e[req.date]; return { ...prev, [req.employee_id || req.empId]: e }; });
       }
-    } catch { /* ignore */ }
+    } catch {
+      setCorrections(prev => prev.map(r => r.id === requestId ? req : r));
+      setAttendance(prev => { const e = { ...(prev[req.employee_id || req.empId] || {}) }; delete e[req.date]; return { ...prev, [req.employee_id || req.empId]: e }; });
+    }
   };
 
   const rejectCorrection = async (requestId) => {
     if (!canApproveAttendance) return;
+    const req = corrections.find(r => r.id === requestId);
+    if (!req) return;
+    setCorrections(prev => prev.map(r => r.id === requestId ? { ...r, status: "rejected", actioned_by: currentUser.name } : r));
     try {
       const res = await fetch(`${API_URL}/api/attendance/corrections/${requestId}/reject`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
@@ -1343,7 +1362,8 @@ const AttendanceMod = ({ currentUser }) => {
       });
       const data = await res.json();
       if (res.ok) setCorrections(prev => prev.map(r => r.id === requestId ? data.correction : r));
-    } catch { /* ignore */ }
+      else setCorrections(prev => prev.map(r => r.id === requestId ? req : r));
+    } catch { setCorrections(prev => prev.map(r => r.id === requestId ? req : r)); }
   };
 
   return ( 
@@ -1764,6 +1784,8 @@ const LeaveMod = ({ currentUser }) => {
   };
 
   const handleApprove = async (rId) => {
+    const orig = reqs.find(x => x.id === rId);
+    setReqs(p => p.map(x => x.id === rId ? { ...x, status: "approved", approved_by: currentUser.name, approvedBy: currentUser.name } : x));
     try {
       const res = await fetch(`${API_URL}/api/leaves/${rId}/approve`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
@@ -1771,9 +1793,12 @@ const LeaveMod = ({ currentUser }) => {
       });
       const data = await res.json();
       if (res.ok) setReqs(p => p.map(x => x.id === rId ? data.leaveRequest : x));
-    } catch { /* ignore */ }
+      else if (orig) setReqs(p => p.map(x => x.id === rId ? orig : x));
+    } catch { if (orig) setReqs(p => p.map(x => x.id === rId ? orig : x)); }
   };
   const handleReject = async (rId) => {
+    const orig = reqs.find(x => x.id === rId);
+    setReqs(p => p.map(x => x.id === rId ? { ...x, status: "rejected", approved_by: currentUser.name, approvedBy: currentUser.name } : x));
     try {
       const res = await fetch(`${API_URL}/api/leaves/${rId}/reject`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
@@ -1781,7 +1806,8 @@ const LeaveMod = ({ currentUser }) => {
       });
       const data = await res.json();
       if (res.ok) setReqs(p => p.map(x => x.id === rId ? data.leaveRequest : x));
-    } catch { /* ignore */ }
+      else if (orig) setReqs(p => p.map(x => x.id === rId ? orig : x));
+    } catch { if (orig) setReqs(p => p.map(x => x.id === rId ? orig : x)); }
   };
 
   return (
@@ -2079,6 +2105,9 @@ const TimeLogMod = ({ currentUser }) => {
   const filteredSheets = (allSheets || []).filter(ts => fil==="all" || ts.status===fil);
 
   const handleHRApprove = async (sheet) => {
+    setAllSheets(prev => prev.map(s =>
+      s.employee_id===sheet.employee_id && s.week_key===sheet.week_key ? { ...s, status: "approved", approved_by: currentUser.name } : s
+    ));
     try {
       const res = await fetch(`${API_URL}/api/timelogs/sheets/${sheet.employee_id}/${sheet.week_key}/approve`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
@@ -2088,10 +2117,18 @@ const TimeLogMod = ({ currentUser }) => {
       if (res.ok) setAllSheets(prev => prev.map(s =>
         s.employee_id===sheet.employee_id && s.week_key===sheet.week_key ? data.timesheet : s
       ));
-    } catch { /* ignore */ }
+      else setAllSheets(prev => prev.map(s =>
+        s.employee_id===sheet.employee_id && s.week_key===sheet.week_key ? sheet : s
+      ));
+    } catch { setAllSheets(prev => prev.map(s =>
+      s.employee_id===sheet.employee_id && s.week_key===sheet.week_key ? sheet : s
+    )); }
   };
 
   const handleHRReject = async (sheet) => {
+    setAllSheets(prev => prev.map(s =>
+      s.employee_id===sheet.employee_id && s.week_key===sheet.week_key ? { ...s, status: "rejected", approved_by: currentUser.name } : s
+    ));
     try {
       const res = await fetch(`${API_URL}/api/timelogs/sheets/${sheet.employee_id}/${sheet.week_key}/reject`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
@@ -2101,7 +2138,12 @@ const TimeLogMod = ({ currentUser }) => {
       if (res.ok) setAllSheets(prev => prev.map(s =>
         s.employee_id===sheet.employee_id && s.week_key===sheet.week_key ? data.timesheet : s
       ));
-    } catch { /* ignore */ }
+      else setAllSheets(prev => prev.map(s =>
+        s.employee_id===sheet.employee_id && s.week_key===sheet.week_key ? sheet : s
+      ));
+    } catch { setAllSheets(prev => prev.map(s =>
+      s.employee_id===sheet.employee_id && s.week_key===sheet.week_key ? sheet : s
+    )); }
   };
 
   const statusBdg = (s) => {
@@ -2218,32 +2260,21 @@ const TimeLogMod = ({ currentUser }) => {
 };
 
 // ─── PAYROLL ENGINE ────────────────────────────────────────────────────────────
-// Statutory rates as per Indian labour law (FY 2024-25).
-// PF: 12% employee + 12% employer on basic salary capped at ₹15,000/month.
-const PF_RATE_EMP      = 0.12;
-const PF_RATE_EMPLOYER = 0.12;
-const PF_CEILING       = 15000;   // PF is calculated on min(basic, ₹15,000)
+// All statutory rates are loaded from APP_STATUTORY_CFG (fetched from the DB at
+// boot) so HR can update PF/ESI/PT/TDS values without a code change.
+// The getFallback* helpers return hardcoded fallbacks ONLY when the DB hasn't
+// been seeded yet (e.g. first startup before init_database() seeds the table).
 
-// ESI applies only when gross monthly salary is ≤ ₹21,000.
-const ESI_GROSS_LIMIT    = 21000;
-const ESI_RATE_EMP       = 0.0075; // 0.75% of gross
-const ESI_RATE_EMPLOYER  = 0.0325; // 3.25% of gross
-
-// Professional Tax slabs (Karnataka schedule — varies by state).
-const PT_SLABS = [{ min:0, max:10000, pt:0 }, { min:10001, max:15000, pt:150 }, { min:15001, max:999999999, pt:200 }];
-
-// Income Tax slabs under the New Regime (Section 115BAC, FY 2024-25).
-// The engine adds a 4% Health & Education cess on top (see computeTaxAnnual).
-const INCOME_TAX_SLABS = [
-  { min:0, max:250000, rate:0 }, { min:250001, max:500000, rate:0.05 }, { min:500001, max:750000, rate:0.10 },
-  { min:750001, max:1000000, rate:0.15 }, { min:1000001, max:1250000, rate:0.20 }, { min:1250001, max:1500000, rate:0.25 },
-  { min:1500001, max:999999999, rate:0.30 },
-];
+const getStat = (key, fallback) => {
+  if (APP_STATUTORY_CFG && APP_STATUTORY_CFG[key] !== undefined) return APP_STATUTORY_CFG[key];
+  return fallback;
+};
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const monthLabelFromDate = (date) => `${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
 const buildPayrollMonths = (startYear = CURRENT_YEAR, startMonthIndex = CURRENT_MONTH_INDEX, count = 48) =>
   Array.from({ length:count }, (_, i) => monthLabelFromDate(new Date(startYear, startMonthIndex - i, 1)));
-const PAYROLL_MONTHS = buildPayrollMonths();
+// Only keep months from January 2025 onward — no 2022/2023/2024 archive
+const PAYROLL_MONTHS = buildPayrollMonths().filter(m => parseInt(m.split(" ")[1], 10) >= 2025);
 const CURRENT_PAYROLL_MONTH = PAYROLL_MONTHS[0];
 const parsePayrollMonth = (month) => {
   const [name, yearText] = String(month || "").split(" ");
@@ -2253,10 +2284,17 @@ const parsePayrollMonth = (month) => {
     year:Number(yearText) || CURRENT_YEAR,
   };
 };
+// Returns the last working day (Mon–Fri) of the given payroll month.
+// If the last calendar day falls on Saturday, move back to Friday.
+// If it falls on Sunday, move back to Friday.
 const defaultPayDateForMonth = (month) => {
   const { monthIndex, year } = parsePayrollMonth(month);
-  const lastDay = new Date(year, monthIndex + 1, 0).getDate();
-  return `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  const d = new Date(year, monthIndex + 1, 0); // last calendar day of month
+  const dow = d.getDay(); // 0=Sun, 6=Sat
+  if (dow === 0) d.setDate(d.getDate() - 2); // Sunday → Friday
+  else if (dow === 6) d.setDate(d.getDate() - 1); // Saturday → Friday
+  // (Mon–Fri stays as-is)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 const fiscalMonthNumber = (month) => {
   const { monthIndex } = parsePayrollMonth(month);
@@ -2269,28 +2307,43 @@ const payrollHistoryForMonths = (months) => months.map((month, i) => ({
   remarks:i === 0 ? "Current payroll cycle" : "Archived payslip available",
 }));
 const money = n => `₹${Math.round(Math.abs(n || 0)).toLocaleString("en-IN")}`;
-const moneySigned = n => `${n < 0 ? "-" : ""}${money(n)}`;
 const clampNum = (v, min, max) => Math.min(max, Math.max(min, Number(v) || 0));
 
-// Slab-based income tax with 4% Health & Education cess applied on top.
-// Uses the New Regime slabs defined in INCOME_TAX_SLABS above.
+// Default slab fallbacks (used only if DB statutory config isn't loaded yet).
+const _DEFAULT_PT_SLABS = [{ min:0, max:10000, pt:0 }, { min:10001, max:15000, pt:150 }, { min:15001, max:999999999, pt:200 }];
+const _DEFAULT_TDS_SLABS = [
+  { min:0, max:250000, rate:0 }, { min:250001, max:500000, rate:0.05 }, { min:500001, max:750000, rate:0.10 },
+  { min:750001, max:1000000, rate:0.15 }, { min:1000001, max:1250000, rate:0.20 }, { min:1250001, max:1500000, rate:0.25 },
+  { min:1500001, max:999999999, rate:0.30 },
+];
+
+// Slab-based income tax — slabs and cess rate loaded from DB, fallback to defaults.
 const computeTaxAnnual = (annualTaxableIncome) => {
+  const slabs    = getStat("tds_slab_json",  _DEFAULT_TDS_SLABS);
+  const cessRate = parseFloat(getStat("tds_cess_rate", 0.04));
   let tax = 0;
-  for (const slab of INCOME_TAX_SLABS) {
+  for (const slab of slabs) {
     if (annualTaxableIncome <= slab.min) break;
     tax += (Math.min(annualTaxableIncome, slab.max) - slab.min) * slab.rate;
   }
-  return Math.round(tax * 1.04); // 4% cess
+  return Math.round(tax * (1 + cessRate));
 };
 
-// Looks up the correct PT amount for a given gross monthly salary.
-const computePT = grossMonthly => PT_SLABS.find(s => grossMonthly >= s.min && grossMonthly <= s.max)?.pt ?? 200;
+// Looks up the correct PT amount for a given gross monthly salary — slabs from DB.
+const computePT = grossMonthly => {
+  const slabs = getStat("pt_slab_json", _DEFAULT_PT_SLABS);
+  return slabs.find(s => grossMonthly >= s.min && grossMonthly <= s.max)?.pt ?? 200;
+};
 
 // Only the CEO and HR team members can run payroll for other employees.
 const canOperatePayroll    = user => user?.accessLevel >= 4 || user?.isHR === true;
 const canOperateOwnPayroll = user => canOperatePayroll(user);
+// Only Director (accessLevel ≥ 4) and HR Admin (isHR) can change payroll configuration / templates.
+const canConfigurePayroll  = user => user?.accessLevel >= 4 || user?.isHR === true;
 // Payroll figures are visible to the payroll operator OR the employee themselves.
 const canViewPayrollOf     = (viewer, targetId) => canOperatePayroll(viewer) || canSeeSensitiveOf(viewer, targetId);
+// A payslip PDF can only be downloaded once the salary has been processed (not while still Draft).
+const isPayslipReleased    = data => !["Draft", "Current"].includes(data?.payrollStatus);
 
 // Default salary structure percentages applied when no DB override exists.
 // basic_pct / hra_pct are expressed as % of CTC; transport is a flat monthly amount (₹).
@@ -2355,18 +2408,26 @@ const calcPayroll = (emp, inputs = {}, customFields = [], structure = DEFAULT_ST
   });
   const customEarningsTotal = activeCustomEarnings.reduce((a, e) => a + e.amount, 0);
   const grossEarnings = proRataBasic + proRataHRA + proRataLTA + proRataTransport + proRataSpecial + overtimePay + customEarningsTotal;
-  const pfBase = Math.min(proRataBasic, PF_CEILING);
-  const calculatedPFEmployee = Math.round(pfBase * PF_RATE_EMP);
+  const pfCeiling   = parseFloat(getStat("pf_ceiling",       15000));
+  const pfRateEmp   = parseFloat(getStat("pf_rate_employee", 0.12));
+  const pfRateEr    = parseFloat(getStat("pf_rate_employer", 0.12));
+  const esiLimit    = parseFloat(getStat("esi_gross_limit",  21000));
+  const esiRateEmp  = parseFloat(getStat("esi_rate_employee",0.0075));
+  const esiRateEr   = parseFloat(getStat("esi_rate_employer",0.0325));
+  const pfBase = Math.min(proRataBasic, pfCeiling);
+  const calculatedPFEmployee = Math.round(pfBase * pfRateEmp);
   const pfEmployee = pfOverride ?? calculatedPFEmployee;
-  const pfEmployer = Math.round(pfBase * PF_RATE_EMPLOYER);
-  const esiEligible = grossEarnings <= ESI_GROSS_LIMIT;
-  const calculatedESIEmployee = esiEligible ? Math.round(grossEarnings * ESI_RATE_EMP) : 0;
+  const pfEmployer = Math.round(pfBase * pfRateEr);
+  const esiEligible = grossEarnings <= esiLimit;
+  const calculatedESIEmployee = esiEligible ? Math.round(grossEarnings * esiRateEmp) : 0;
   const esiEmployee = esiOverride ?? calculatedESIEmployee;
-  const esiEmployer = esiEligible ? Math.round(grossEarnings * ESI_RATE_EMPLOYER) : 0;
+  const esiEmployer = esiEligible ? Math.round(grossEarnings * esiRateEr) : 0;
   const professionalTax = ptOverride ?? computePT(grossEarnings);
+  const limit80C           = parseFloat(getStat("tds_80c_limit",          150000));
+  const standardDeduction  = parseFloat(getStat("tds_standard_deduction",   50000));
   const annualGross = grossEarnings * 12;
-  const annual80C = Math.min(pfEmployee * 12, 150000);
-  const annualTaxableIncome = Math.max(0, annualGross - annual80C - 50000);
+  const annual80C = Math.min(pfEmployee * 12, limit80C);
+  const annualTaxableIncome = Math.max(0, annualGross - annual80C - standardDeduction);
   const annualTax = computeTaxAnnual(annualTaxableIncome);
   const tdsMonthly = tdsOverride ?? Math.round(annualTax / 12);
   const totalStatutoryDeductions = pfEmployee + esiEmployee + professionalTax + tdsMonthly;
@@ -2396,8 +2457,8 @@ const calcPayroll = (emp, inputs = {}, customFields = [], structure = DEFAULT_ST
       ...activeCustomEarnings.filter(e => e.amount > 0),
     ],
     statutory:[
-      { label:"Provident Fund (12%)", amount:pfEmployee, code:"PF" },
-      ...(esiEligible ? [{ label:"ESI (0.75%)", amount:esiEmployee, code:"ESI" }] : []),
+      { label:`Provident Fund (${(pfRateEmp*100).toFixed(0)}%)`, amount:pfEmployee, code:"PF" },
+      ...(esiEligible ? [{ label:`ESI (${(esiRateEmp*100).toFixed(2)}%)`, amount:esiEmployee, code:"ESI" }] : []),
       { label:"Professional Tax", amount:professionalTax, code:"PT" },
       { label:"Income Tax (TDS)", amount:tdsMonthly, code:"TDS" },
     ],
@@ -2413,134 +2474,190 @@ const calcPayroll = (emp, inputs = {}, customFields = [], structure = DEFAULT_ST
   };
 };
 
-const pdfMoney = n => `INR ${Math.round(Math.abs(n || 0)).toLocaleString("en-IN")}`;
-const pdfEscape = s => String(s ?? "").replace(/[\\()]/g, "\\$&").replace(/[^\x20-\x7E]/g, "-");
-const pdfRgb = (hex) => {
-  const clean = hex.replace("#", "");
-  const nums = [0, 2, 4].map(i => parseInt(clean.slice(i, i + 2), 16) / 255);
-  return nums.map(n => n.toFixed(3)).join(" ");
+// ── Payslip HTML document (used for both print/download and email) ─────────────
+// Generates a self-contained HTML document that renders the payslip in the
+// appointment-letter format. Opens in a new tab; the user clicks "Save as PDF".
+const payslipHTMLDoc = (data) => {
+  const fmt = n => `₹${Math.round(Math.abs(n || 0)).toLocaleString("en-IN")}`;
+  const esc = s => String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const pfRate = (parseFloat(getStat("pf_rate_employee", 0.12)) * 100).toFixed(0);
+  const pfCeil = parseFloat(getStat("pf_ceiling", 15000)).toLocaleString("en-IN");
+  const logoURL = window.location.origin + "/doloxe-logo.png";
+
+  const earningRows = data.earnings.map(r => `
+    <tr>
+      <td class="comp">${esc(r.label)}</td>
+      <td class="amt">${fmt(r.amount)}</td>
+      <td class="amt">${fmt(r.amount * 12)}</td>
+      <td class="note"></td>
+    </tr>`).join("");
+
+  const deductRows = [...data.statutory, ...data.voluntary].map(r => {
+    let note = "";
+    if (r.code === "PF")  note = `${pfRate}% of ₹${pfCeil} cap`;
+    return `
+    <tr>
+      <td class="comp">${esc(r.label)}</td>
+      <td class="amt">${fmt(r.amount)}</td>
+      <td class="amt">${fmt(r.amount * 12)}</td>
+      <td class="note">${note}</td>
+    </tr>`;
+  }).join("");
+
+  return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8">
+<title>Pay Slip – ${esc(data.month)} – ${esc(data.employeeName)}</title>
+<style>
+@page{margin:10mm;size:A4 portrait}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,'Helvetica Neue',sans-serif;font-size:10pt;color:#111827;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+/* Header */
+.hdr{background:#0D0D0E;color:#fff;padding:13px 18px;display:flex;align-items:center;justify-content:space-between}
+.hdr-left{display:flex;align-items:center;gap:12px}
+.co-name{font-size:13pt;font-weight:900;line-height:1.2}
+.co-cin{font-size:7.5pt;color:#9CA3AF;margin-top:2px}
+.hdr-right{text-align:right}
+.slip-lbl{font-size:7pt;color:#9CA3AF;font-weight:700;letter-spacing:1.5px;text-transform:uppercase}
+.slip-month{font-size:13pt;font-weight:900}
+/* Employee bar */
+.emp-bar{background:#F8FAFC;padding:10px 18px;display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid #E5E7EB}
+.emp-name{font-size:12pt;font-weight:900}
+.emp-sub{font-size:9pt;color:#6B7280;margin-top:2px}
+.emp-meta{font-size:8pt;color:#9CA3AF;margin-top:3px}
+/* Compensation table */
+table.sal{width:100%;border-collapse:collapse}
+table.sal thead th{font-size:8pt;font-weight:700;color:#6B7280;padding:7px 12px;border-bottom:2px solid #111827;background:#F9FAFB;text-transform:uppercase;letter-spacing:0.3px}
+table.sal thead th:not(:first-child){text-align:right}
+.sec-hdr td{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:5px 12px;border-top:1px solid #E5E7EB}
+.sec-earn td{background:#ECFDF5;color:#059669}
+.sec-ded  td{background:#FEF2F2;color:#DC2626}
+td.comp{padding:5px 12px;font-size:10pt;color:#374151;border-bottom:1px solid #F0F2F5}
+td.amt{padding:5px 12px;text-align:right;font-size:10pt;font-weight:500;border-bottom:1px solid #F0F2F5;white-space:nowrap}
+td.note{padding:5px 10px 5px 4px;text-align:right;font-size:7.5pt;color:#9CA3AF;border-bottom:1px solid #F0F2F5}
+.tot-earn td{font-weight:700;font-size:10.5pt;background:#ECFDF5;color:#065F46;padding:7px 12px;border-top:2px solid #D1FAE5}
+.tot-earn td:not(:first-child){text-align:right}
+.tot-ded  td{font-weight:700;font-size:10.5pt;background:#FEF2F2;color:#991B1B;padding:7px 12px;border-top:2px solid #FECACA}
+.tot-ded  td:not(:first-child){text-align:right}
+/* Net band */
+.net-band{background:#0D0D0E;color:#fff;padding:13px 18px;display:flex;justify-content:space-between;align-items:center}
+.net-lbl{font-size:7pt;color:#9CA3AF;font-weight:700;letter-spacing:1px;margin-bottom:3px}
+.net-month{font-size:20pt;font-weight:900}
+.net-sub{font-size:8pt;color:#9CA3AF;margin-top:1px}
+.net-annual{font-size:14pt;font-weight:700}
+/* Info row */
+.info-row{display:flex;border-bottom:1px solid #E5E7EB}
+.info-cell{flex:1;padding:8px 14px;border-right:1px solid #E5E7EB}
+.info-cell:last-child{border-right:none}
+.info-lbl{font-size:7pt;color:#9CA3AF;font-weight:700;text-transform:uppercase;margin-bottom:2px}
+.info-val{font-size:10pt;font-weight:700}
+/* Bottom */
+.bot{display:flex;border-bottom:1px solid #E5E7EB}
+.ytd-box{flex:1;background:#EFF6FF;padding:10px 14px;border-right:1px solid #DBEAFE}
+.tax-box{flex:1;background:#FFF7ED;padding:10px 14px}
+.box-ttl{font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px}
+.ytd-box .box-ttl{color:#1D4ED8}
+.tax-box .box-ttl{color:#D97706}
+.kv-row{display:flex;gap:16px;flex-wrap:wrap}
+.kv-l{font-size:7.5pt;color:#6B7280;margin-bottom:1px}
+.kv-v{font-size:10pt;font-weight:700}
+.ytd-box .kv-v{color:#1B45F5}
+.tax-box .kv-v{color:#D97706}
+.footer{padding:8px 18px;font-size:7.5pt;color:#9CA3AF;text-align:center;border-top:1px solid #E5E7EB}
+</style>
+</head><body>
+
+<div class="hdr">
+  <div class="hdr-left">
+    <img src="${logoURL}" alt="DOLOXE" style="height:48px;object-fit:contain;display:block">
+    <div>
+      <div class="co-name">Doloxe India Private Limited</div>
+      <div class="co-cin">CIN: U72900TG2021PTC149118</div>
+    </div>
+  </div>
+  <div class="hdr-right">
+    <div class="slip-lbl">PAY SLIP</div>
+    <div class="slip-month">${esc(data.month)}</div>
+  </div>
+</div>
+
+<div class="emp-bar">
+  <div>
+    <div class="emp-name">${esc(data.employeeName)}</div>
+    <div class="emp-sub">${esc(data.employeeId)} &nbsp;·&nbsp; ${esc(data.designation)} &nbsp;·&nbsp; ${esc(data.department)}</div>
+    <div class="emp-meta">PAN: ${esc(data.pan||"—")} &nbsp;|&nbsp; UAN: ${esc(data.uan||"—")} &nbsp;|&nbsp; Bank: ${esc(data.bank||"—")} &nbsp;|&nbsp; A/c: ${esc(data.accountNo||"—")} &nbsp;|&nbsp; IFSC: ${esc(data.ifsc||"—")}</div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:8pt;color:#9CA3AF">Days: ${data.payableDays} &nbsp;·&nbsp; LOP: ${data.lopDays}</div>
+    <div style="font-size:10pt;font-weight:700;margin-top:3px">Pay Date: ${esc(data.payDate)}</div>
+    <div style="font-size:8pt;color:#9CA3AF;margin-top:2px">${esc(data.payrollStatus)}</div>
+  </div>
+</div>
+
+<table class="sal">
+  <thead>
+    <tr>
+      <th style="text-align:left;width:42%">Component</th>
+      <th style="width:18%">Monthly (₹)</th>
+      <th style="width:18%">Annual (₹)</th>
+      <th style="width:22%">Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="sec-hdr sec-earn"><td colspan="4">Earnings</td></tr>
+    ${earningRows}
+    <tr class="tot-earn">
+      <td>Gross Earnings</td>
+      <td>${fmt(data.grossEarnings)}</td>
+      <td>${fmt(data.grossEarnings * 12)}</td>
+      <td></td>
+    </tr>
+    <tr class="sec-hdr sec-ded"><td colspan="4">Deductions</td></tr>
+    ${deductRows}
+    <tr class="tot-ded">
+      <td>Total Deductions</td>
+      <td>${fmt(data.totalDeductions)}</td>
+      <td>${fmt(data.totalDeductions * 12)}</td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="net-band">
+  <div>
+    <div class="net-lbl">NET TAKE-HOME</div>
+    <div class="net-month">${fmt(data.netPay)} <span style="font-size:10pt;font-weight:400;color:#9CA3AF">/ month</span></div>
+  </div>
+  <div style="text-align:right">
+    <div style="font-size:8pt;color:#9CA3AF;margin-bottom:2px">Annual</div>
+    <div class="net-annual">${fmt(data.netPay * 12)} <span style="font-size:8pt;font-weight:400;color:#9CA3AF">/ year</span></div>
+  </div>
+</div>
+
+<div class="info-row">
+  ${[["Pay Date",data.payDate],["Payment Mode",data.paymentMode||"Bank Transfer"],["Status",data.payrollStatus],["Tax Regime",data.taxRegime||"New Regime"]].map(([l,v])=>
+    `<div class="info-cell"><div class="info-lbl">${l}</div><div class="info-val">${esc(String(v))}</div></div>`).join("")}
+</div>
+
+<div class="bot">
+  <div class="ytd-box">
+    <div class="box-ttl">Year-to-Date</div>
+    <div class="kv-row">
+      ${[["Gross",data.ytd.gross],["Net",data.ytd.net],["PF",data.ytd.pf],["TDS",data.ytd.tax]].map(([l,v])=>
+        `<div><div class="kv-l">${l}</div><div class="kv-v">${fmt(v)}</div></div>`).join("")}
+    </div>
+  </div>
+  <div class="tax-box">
+    <div class="box-ttl">Tax Computation</div>
+    <div class="kv-row">
+      ${[["Taxable",data.annualTaxableIncome],["Annual Tax",data.annualTax],["Monthly TDS",data.tdsMonthly],["Employer PF",data.pfEmployer]].map(([l,v])=>
+        `<div><div class="kv-l">${l}</div><div class="kv-v">${fmt(v)}</div></div>`).join("")}
+    </div>
+  </div>
+</div>
+
+<div class="footer">This is a system-generated payslip and does not require a signature. &nbsp;|&nbsp; For queries, contact DOLOXE Finance Operations.</div>
+</body></html>`;
 };
-const createStyledPdfBlob = (commands) => {
-  const content = commands.join("\n");
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
-    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
-  ];
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-  objects.forEach((obj, i) => {
-    offsets.push(pdf.length);
-    pdf += `${i + 1} 0 obj\n${obj}\nendobj\n`;
-  });
-  const xref = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map(o => `${String(o).padStart(10, "0")} 00000 n `).join("\n")}\n`;
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return new Blob([pdf], { type:"application/pdf" });
-};
-const payslipPdfBlob = (data) => {
-  const c = [];
-  const fill = (hex) => c.push(`${pdfRgb(hex)} rg`);
-  const stroke = (hex) => c.push(`${pdfRgb(hex)} RG`);
-  const rect = (x, y, w, h, hex) => { fill(hex); c.push(`${x} ${y} ${w} ${h} re f`); };
-  const line = (x1, y1, x2, y2, hex = "#E5E7EB") => { stroke(hex); c.push(`0.7 w ${x1} ${y1} m ${x2} ${y2} l S`); };
-  const text = (value, x, y, size = 10, hex = "#111827", bold = false) => {
-    fill(hex);
-    c.push(`BT /${bold ? "F2" : "F1"} ${size} Tf ${x} ${y} Td (${pdfEscape(value).slice(0, 95)}) Tj ET`);
-  };
-  const rightText = (value, x, y, size = 10, hex = "#111827", bold = false) => {
-    const safe = String(value ?? "");
-    text(safe, x - safe.length * size * 0.48, y, size, hex, bold);
-  };
-  const row = (label, amount, x, y, color = "#111827") => {
-    text(label, x, y, 9.2, "#374151");
-    rightText(pdfMoney(amount), x + 235, y, 9.2, color, true);
-    line(x, y - 7, x + 238, y - 7, "#F0F2F5");
-  };
-
-  rect(0, 0, 595, 842, "#FFFFFF");
-  rect(26, 762, 543, 54, "#0D0D0E");
-  rect(26, 762, 6, 54, "#1B45F5");
-  text("Doloxe India Private Limited", 44, 794, 19, "#FFFFFF", true);
-  text("CIN:  U72900TG2021PTC149118 ", 44, 779, 8.5, "#B8BCC7");
-  rightText("PAY SLIP", 548, 794, 10, "#B8BCC7", true);
-  rightText(data.month, 548, 779, 13, "#FFFFFF", true);
-
-  rect(26, 708, 543, 42, "#F8FAFC");
-  text(data.employeeName, 42, 733, 13, "#111827", true);
-  text(`${data.employeeId} | ${data.designation} | ${data.department}`, 42, 718, 9, "#6B7280");
-  rightText(`Generated ${new Date().toLocaleDateString("en-IN")}`, 548, 733, 8.5, "#6B7280");
-  rightText(`Pay Date ${data.payDate}`, 548, 718, 9, "#111827", true);
-
-  const details = [
-    ["Joining", data.joining], ["Location", data.location], ["PAN", data.pan], ["UAN", data.uan],
-    ["PF Account", data.pfAccount], ["Bank", data.bank], ["Account", data.accountNo], ["IFSC", data.ifsc],
-  ];
-  details.forEach(([label, value], i) => {
-    const x = 42 + (i % 4) * 132;
-    const y = 681 - Math.floor(i / 4) * 34;
-    text(label.toUpperCase(), x, y + 13, 7.2, "#9CA3AF", true);
-    text(value, x, y, 8.6, "#111827", true);
-  });
-
-  [["Payable Days", data.payableDays, "#0F8C5A"], ["LOP Days", data.lopDays, "#C8312A"], ["OT Hours", data.overtimeHours, "#B06010"]].forEach(([label, value, color], i) => {
-    const x = 26 + i * 135.75;
-    rect(x, 581, 135.75, 43, "#F8FAFC");
-    line(x + 135.75, 581, x + 135.75, 624);
-    rightText(String(value), x + 72, 603, 15, color, true);
-    text(label.toUpperCase(), x + 75, 603, 7.2, "#9CA3AF", true);
-  });
-
-  text("EARNINGS", 42, 548, 9, "#6B7280", true);
-  text("DEDUCTIONS", 318, 548, 9, "#6B7280", true);
-  line(42, 538, 280, 538, "#111827");
-  line(318, 538, 556, 538, "#111827");
-
-  data.earnings.slice(0, 9).forEach((r, i) => row(r.label, r.amount, 42, 519 - i * 20, "#0F8C5A"));
-  [...data.statutory, ...data.voluntary].slice(0, 9).forEach((r, i) => row(r.label, r.amount, 318, 519 - i * 20, "#C8312A"));
-
-  rect(42, 323, 238, 28, "#F0FDF4");
-  text("Gross Earnings", 54, 333, 10, "#065F46", true);
-  rightText(pdfMoney(data.grossEarnings), 266, 333, 10, "#0F8C5A", true);
-  rect(318, 323, 238, 28, "#FEF2F2");
-  text("Total Deductions", 330, 333, 10, "#991B1B", true);
-  rightText(pdfMoney(data.totalDeductions), 542, 333, 10, "#C8312A", true);
-
-  rect(26, 252, 543, 50, "#0D0D0E");
-  text("Net Pay", 44, 282, 9, "#9CA3AF", true);
-  text(pdfMoney(data.netPay), 44, 262, 22, "#FFFFFF", true);
-  rightText(` ${data.paymentMode}`, 548, 282, 9, "#B8BCC7");
-  rightText(`Status: ${data.payrollStatus}`, 548, 265, 9, "#FFFFFF", true);
-
-  rect(26, 187, 543, 43, "#F8FAFF");
-  text("YEAR-TO-DATE SUMMARY", 42, 213, 8, "#6B7280", true);
-  [["Gross", data.ytd.gross], ["Net", data.ytd.net], ["PF", data.ytd.pf], ["TDS", data.ytd.tax]].forEach(([label, value], i) => {
-    const x = 42 + i * 126;
-    text(`YTD ${label}`, x, 198, 8, "#6B7280");
-    text(pdfMoney(value), x, 185, 10, "#1B45F5", true);
-  });
-
-  rect(26, 123, 543, 43, "#FFF7ED");
-  text("TAX COMPUTATION", 42, 149, 8, "#B06010", true);
-  [["Annual Taxable", data.annualTaxableIncome], ["Annual Tax", data.annualTax], ["Monthly TDS", data.tdsMonthly], ["Employer PF", data.pfEmployer]].forEach(([label, value], i) => {
-    const x = 42 + i * 126;
-    text(label, x, 134, 8, "#9A5814");
-    text(pdfMoney(value), x, 121, 10, "#B06010", true);
-  });
-
-  text("This is a system-generated payslip and does not require a signature.", 42, 82, 8, "#9CA3AF");
-  text("For queries, contact DOLOXE Finance Operations.", 42, 68, 8, "#9CA3AF");
-  return createStyledPdfBlob(c);
-};
-const blobToBase64 = (blob) => new Promise((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-  reader.onerror = reject;
-  reader.readAsDataURL(blob);
-});
 const htmlEscape = value => String(value ?? "")
   .replace(/&/g, "&amp;")
   .replace(/</g, "&lt;")
@@ -2654,6 +2771,29 @@ const SalaryMod = ({ currentUser }) => {
   const [cfForm, setCfForm] = useState(null);
   const [cfFormData, setCfFormData] = useState({ name:"", category:"earning", calcType:"fixed", value:0, active:true });
 
+  // ── Statutory deduction config (PF/ESI/PT/TDS) ──
+  const [statCfg, setStatCfg] = useState(() => APP_STATUTORY_CFG);
+  const [statEdit, setStatEdit] = useState({});
+  const [statSaving, setStatSaving] = useState(false);
+
+  const saveStatField = async (configKey, rawValue) => {
+    setStatSaving(true);
+    try {
+      await fetch(`${API_URL}/api/payroll/statutory-config/${configKey}`, {
+        method:"PUT", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ value:String(rawValue), updatedBy:currentUser.id }),
+      });
+      // Parse for the local state the same way AppBootstrap does
+      let parsed;
+      try { parsed = JSON.parse(rawValue); } catch { parsed = rawValue; }
+      const updated = { ...(APP_STATUTORY_CFG || {}), [configKey]: parsed };
+      APP_STATUTORY_CFG = updated;
+      window.__HR_APP_STATUTORY_CFG__ = updated;
+      setStatCfg({ ...updated });
+      setStatEdit(p => { const n={...p}; delete n[configKey]; return n; });
+    } finally { setStatSaving(false); }
+  };
+
   const saveStructureField = async (key, value) => {
     setStructureSaving(true);
     try {
@@ -2739,14 +2879,45 @@ const SalaryMod = ({ currentUser }) => {
       payrollStatus:nextMonth === PAYROLL_MONTHS[0] ? "Current" : "Paid",
     }, customFields, structure));
   };
-  const downloadPayslip = (data) => {
-    const blob = payslipPdfBlob(data);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `Payslip_${data.employeeId}_${data.month.replaceAll(" ", "_")}.pdf`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const downloadPayslip = async (data) => {
+    const htmlStr = payslipHTMLDoc(data);
+    const parsed = new DOMParser().parseFromString(htmlStr, "text/html");
+    parsed.querySelector(".print-bar")?.remove();
+
+    const styleEl = document.createElement("style");
+    styleEl.textContent = parsed.querySelector("style")?.textContent || "";
+    document.head.appendChild(styleEl);
+
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = "position:fixed;left:-9999px;top:0;width:794px;background:#fff;";
+    wrapper.innerHTML = parsed.body.innerHTML;
+    document.body.appendChild(wrapper);
+
+    try {
+      const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+        import("html2canvas"),
+        import("jspdf"),
+      ]);
+      const canvas = await html2canvas(wrapper, { scale: 2, useCORS: true, backgroundColor: "#fff", logging: false });
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      const pdfW = pdf.internal.pageSize.getWidth();
+      const pdfH = (canvas.height * pdfW) / canvas.width;
+      const pageH = pdf.internal.pageSize.getHeight();
+      if (pdfH <= pageH) {
+        pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", 0, 0, pdfW, pdfH);
+      } else {
+        let y = 0;
+        while (y < pdfH) {
+          pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", 0, -y, pdfW, pdfH);
+          y += pageH;
+          if (y < pdfH) pdf.addPage();
+        }
+      }
+      pdf.save(`Payslip_${data.employeeId}_${data.month.replaceAll(" ", "_")}.pdf`);
+    } finally {
+      document.body.removeChild(wrapper);
+      document.head.removeChild(styleEl);
+    }
   };
   const sendPayslipEmail = async () => {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTo)) {
@@ -2774,13 +2945,11 @@ const SalaryMod = ({ currentUser }) => {
     setEmailSending(true);
     setEmailStatus("Sending payslip...");
     try {
-      const filename = `Payslip_${emailModal.employeeId}_${emailModal.month.replaceAll(" ","_")}.pdf`;
-      const pdfBase64 = await blobToBase64(payslipPdfBlob(emailModal));
       const htmlBody = payslipEmailHtml(emailModal);
       const res = await fetch(endpoint, {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
-        body:JSON.stringify({ to:emailTo, subject, body, htmlBody, filename, attachmentType:"application/pdf", attachmentBase64:pdfBase64 }),
+        body:JSON.stringify({ to:emailTo, subject, body, htmlBody }),
       });
       if (!res.ok) {
         let detail = `Email service returned ${res.status}`;
@@ -2820,40 +2989,154 @@ const SalaryMod = ({ currentUser }) => {
   const departments = ["All", ...new Set(scopedEmps.map(e => e.dept))];
 
   const renderPayslipCard = (data) => {
-    const owner = ALL_USERS.find(e => e.id === data.employeeId) || emp;
+    const owner   = ALL_USERS.find(e => e.id === data.employeeId) || emp;
     const allowed = canViewPayrollOf(currentUser, owner.id);
+    const released= isPayslipReleased(data);
+
+    const CompRow = ({ label, monthly, annual, note, bold, greenRow, redRow }) => (
+      <tr style={{ background: greenRow ? "var(--green-soft)" : redRow ? "var(--red-soft)" : "transparent" }}>
+        <td style={{ padding:"6px 10px 6px 14px", fontSize:12.5, fontWeight: bold ? 700 : 400, color: greenRow ? "var(--green)" : redRow ? "var(--red)" : "var(--ink2)" }}>{label}</td>
+        <td style={{ padding:"6px 10px", fontSize:12.5, fontWeight: bold ? 700 : 500, textAlign:"right", color: greenRow ? "var(--green)" : redRow ? "var(--red)" : "var(--ink)" }}>{money(monthly)}</td>
+        <td style={{ padding:"6px 10px", fontSize:12.5, fontWeight: bold ? 700 : 500, textAlign:"right", color: greenRow ? "var(--green)" : redRow ? "var(--red)" : "var(--ink)" }}>{money(annual)}</td>
+        <td style={{ padding:"6px 10px 6px 4px", fontSize:11, color:"var(--ink4)", textAlign:"right" }}>{note || ""}</td>
+      </tr>
+    );
+    const ColHead = ({ label, right }) => (
+      <th style={{ padding:"6px 10px", fontSize:10.5, fontWeight:700, color:"var(--ink4)", textAlign: right ? "right" : "left", borderBottom:"2px solid var(--ink)", background:"var(--raised)", whiteSpace:"nowrap" }}>{label}</th>
+    );
+
     return (
       <div style={{ background:"var(--surface)", border:"1px solid var(--brd)", borderRadius:"var(--r12)", overflow:"hidden" }}>
+        {/* Header */}
         <div className="slip-h">
           <div style={{ display:"flex", justifyContent:"space-between", gap:16 }}>
-            <div><div style={{ fontFamily:"var(--display)", fontSize:18, fontWeight:800 }}>Doloxe India Private Limited</div><div style={{ fontSize:11.5, opacity:0.6 }}>CIN: U72900TG2021PTC149118 </div></div>
-            <div style={{ textAlign:"right" }}><div style={{ fontSize:11, opacity:0.55, fontWeight:800 }}>PAY SLIP</div><div style={{ fontWeight:800 }}>{data.month}</div></div>
+            <div>
+              <div style={{ fontFamily:"var(--display)", fontSize:17, fontWeight:800 }}>Doloxe India Private Limited</div>
+              <div style={{ fontSize:11, opacity:0.55 }}>CIN: U72900TG2021PTC149118</div>
+            </div>
+            <div style={{ textAlign:"right" }}>
+              <div style={{ fontSize:10, opacity:0.5, fontWeight:700, letterSpacing:1 }}>PAY SLIP</div>
+              <div style={{ fontWeight:800, fontSize:15 }}>{data.month}</div>
+            </div>
           </div>
         </div>
-        <div style={{ padding:"14px 22px", background:"var(--raised)", borderBottom:"1px solid var(--brd)" }}>
-          <div className="info-grid">{[["Employee",data.employeeName],["Employee ID",data.employeeId],["Designation",data.designation],["Department",data.department],["Joining",data.joining],["Location",data.location],["PAN",allowed?data.pan:"Confidential"],["UAN",allowed?data.uan:"Confidential"],["PF Account",allowed?data.pfAccount:"Confidential"],["Bank",allowed?data.bank:"Confidential"],["Account No.",allowed?data.accountNo:"Confidential"],["IFSC",allowed?data.ifsc:"Confidential"]].map(([k,v])=><div key={k} className="if"><div className="if-l">{k}</div><div style={{ fontWeight:650 }}>{v}</div></div>)}</div>
+
+        {/* Employee info */}
+        <div style={{ padding:"12px 20px", background:"var(--raised)", borderBottom:"1px solid var(--brd)" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", flexWrap:"wrap", gap:8 }}>
+            <div>
+              <div style={{ fontWeight:700, fontSize:14 }}>{data.employeeName}</div>
+              <div style={{ fontSize:11.5, color:"var(--ink3)", marginTop:2 }}>{data.employeeId} · {data.designation} · {data.department}</div>
+            </div>
+            <div style={{ textAlign:"right", fontSize:11.5, color:"var(--ink3)" }}>
+              <div><span style={{ fontWeight:600 }}>Pay Date:</span> {data.payDate}</div>
+              <div><span style={{ fontWeight:600 }}>Days:</span> {data.payableDays} &nbsp;·&nbsp; <span style={{ fontWeight:600 }}>LOP:</span> {data.lopDays}</div>
+            </div>
+          </div>
+          <div style={{ marginTop:6, display:"flex", gap:16, flexWrap:"wrap", fontSize:11, color:"var(--ink4)" }}>
+            {[["PAN", data.pan], ["UAN", data.uan], ["Bank", data.bank], ["A/c", data.accountNo], ["IFSC", data.ifsc]].map(([k, v]) =>
+              <span key={k}><b style={{ color:"var(--ink3)" }}>{k}:</b> {allowed ? v : "••••••"}</span>
+            )}
+          </div>
         </div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", borderBottom:"1px solid var(--brd)" }}>
-          {[["Payable Days",data.payableDays,"var(--green)"],["LOP Days",data.lopDays,data.lopDays ? "var(--red)" : "var(--ink3)"],["OT Hours",data.overtimeHours,"var(--amber)"]].map(([l,v,c])=>(
-            <div key={l} style={{ padding:"12px 10px", textAlign:"center", borderRight:"1px solid var(--brd)" }}><div style={{ fontFamily:"var(--mono)", fontWeight:800, fontSize:18, color:c }}>{v}</div><div className="if-l">{l}</div></div>
-          ))}
-        </div>
+
+        {/* Payroll status notice for unreleased slips */}
+        {!released && (
+          <div style={{ padding:"10px 20px", background:"var(--amber-soft)", borderBottom:"1px solid rgba(176,96,16,0.2)", display:"flex", alignItems:"center", gap:8 }}>
+            <Icon n="info" s={14} style={{ color:"var(--amber)" }}/>
+            <span style={{ fontSize:12, color:"var(--amber)", fontWeight:600 }}>Payslip is in <b>{data.payrollStatus}</b> state. PDF download will be available once salary is marked <b>Processed</b>.</span>
+          </div>
+        )}
+
         {allowed ? (
           <>
+            {/* Compensation Schedule table */}
+            <div style={{ padding:"14px 20px 0", marginBottom:0 }}>
+              <div style={{ fontSize:11, fontWeight:700, letterSpacing:0.5, color:"var(--ink3)", marginBottom:10, textTransform:"uppercase" }}>Compensation Schedule</div>
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                  <thead>
+                    <tr>
+                      <ColHead label="Component"/>
+                      <ColHead label="Monthly (₹)" right/>
+                      <ColHead label="Annual (₹)" right/>
+                      <ColHead label="Notes" right/>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* Earnings */}
+                    <tr><td colSpan={4} style={{ padding:"8px 14px 4px", fontSize:10.5, fontWeight:700, color:"var(--green)", letterSpacing:0.5, background:"var(--green-soft)", borderTop:"1px solid var(--brd)" }}>EARNINGS</td></tr>
+                    {data.earnings.map(r => (
+                      <tr key={r.label} style={{ borderBottom:"1px dashed var(--brd)" }}>
+                        <td style={{ padding:"5px 10px 5px 14px", fontSize:12.5, color:"var(--ink2)" }}>{r.label}</td>
+                        <td style={{ padding:"5px 10px", fontSize:12.5, textAlign:"right", fontWeight:500, color:"var(--ink)" }}>{money(r.amount)}</td>
+                        <td style={{ padding:"5px 10px", fontSize:12.5, textAlign:"right", fontWeight:500, color:"var(--ink)" }}>{money(r.amount * 12)}</td>
+                        <td style={{ padding:"5px 10px 5px 4px", fontSize:11, color:"var(--ink4)", textAlign:"right" }}></td>
+                      </tr>
+                    ))}
+                    <CompRow label="Gross Earnings" monthly={data.grossEarnings} annual={data.grossEarnings * 12} greenRow bold/>
+
+                    {/* Deductions */}
+                    <tr><td colSpan={4} style={{ padding:"8px 14px 4px", fontSize:10.5, fontWeight:700, color:"var(--red)", letterSpacing:0.5, background:"var(--red-soft)", borderTop:"1px solid var(--brd)" }}>DEDUCTIONS</td></tr>
+                    {[...data.statutory, ...data.voluntary].map(r => {
+                      let note = "";
+                      if (r.code === "PF")  note = `${(getStat("pf_rate_employee", 0.12)*100).toFixed(0)}% of ₹${getStat("pf_ceiling",15000).toLocaleString("en-IN")} cap`;
+                      if (r.code === "ESI") note = `${(getStat("esi_rate_employee",0.0075)*100).toFixed(2)}% of gross`;
+                      return (
+                        <tr key={r.label} style={{ borderBottom:"1px dashed var(--brd)" }}>
+                          <td style={{ padding:"5px 10px 5px 14px", fontSize:12.5, color:"var(--ink2)" }}>{r.label}</td>
+                          <td style={{ padding:"5px 10px", fontSize:12.5, textAlign:"right", fontWeight:500, color:"var(--ink)" }}>{money(r.amount)}</td>
+                          <td style={{ padding:"5px 10px", fontSize:12.5, textAlign:"right", fontWeight:500, color:"var(--ink)" }}>{money(r.amount * 12)}</td>
+                          <td style={{ padding:"5px 10px 5px 4px", fontSize:11, color:"var(--ink4)", textAlign:"right" }}>{note}</td>
+                        </tr>
+                      );
+                    })}
+                    <CompRow label="Total Deductions" monthly={data.totalDeductions} annual={data.totalDeductions * 12} redRow bold/>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Net Take-Home band */}
+            <div style={{ margin:"0", padding:"14px 20px", background:"var(--ink2)", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12 }}>
+              <div>
+                <div style={{ fontSize:10, color:"#9CA3AF", fontWeight:700, letterSpacing:1, marginBottom:4 }}>NET TAKE-HOME</div>
+                <div style={{ fontSize:24, fontWeight:800, color:"#FFFFFF" }}>{money(data.netPay)} <span style={{ fontSize:12, color:"#9CA3AF", fontWeight:400 }}>/ month</span></div>
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:10, color:"#9CA3AF", marginBottom:4 }}>Annual</div>
+                <div style={{ fontSize:18, fontWeight:700, color:"#FFFFFF" }}>{money(data.netPay * 12)} / year</div>
+              </div>
+            </div>
+
+            {/* Payment & Status info */}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:0, borderTop:"1px solid var(--brd)", borderBottom:"1px solid var(--brd)" }}>
+              {[["Pay Date", data.payDate], ["Payment Mode", data.paymentMode || "—"], ["Status", data.payrollStatus], ["Tax Regime", data.taxRegime]].map(([l, v], i) => (
+                <div key={l} style={{ padding:"10px 14px", borderRight: i < 3 ? "1px solid var(--brd)" : "none" }}>
+                  <div className="if-l">{l}</div>
+                  <div style={{ fontWeight:700, fontSize:12.5 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* YTD + Tax summary */}
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", borderBottom:"1px solid var(--brd)" }}>
-              <div style={{ padding:"16px 20px", borderRight:"1px solid var(--brd)" }}><div className="flbl" style={{ marginBottom:8 }}>Earnings</div>{data.earnings.map(r=><div key={r.label} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px dashed var(--brd)" }}><span className="t3" style={{ fontSize:12 }}>{r.label}</span><b>{money(r.amount)}</b></div>)}<div style={{ display:"flex", justifyContent:"space-between", paddingTop:8, marginTop:8, borderTop:"2px solid var(--ink)", fontWeight:800 }}><span>Gross Earnings</span><span style={{ color:"var(--green)" }}>{money(data.grossEarnings)}</span></div></div>
-              <div style={{ padding:"16px 20px" }}><div className="flbl" style={{ marginBottom:8 }}>Deductions</div>{[...data.statutory,...data.voluntary].map(r=><div key={r.label} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom:"1px dashed var(--brd)" }}><span className="t3" style={{ fontSize:12 }}>{r.label}</span><b style={{ color:"var(--red)" }}>{moneySigned(-r.amount)}</b></div>)}<div style={{ display:"flex", justifyContent:"space-between", paddingTop:8, marginTop:8, borderTop:"2px solid var(--ink)", fontWeight:800 }}><span>Total Deductions</span><span style={{ color:"var(--red)" }}>{money(data.totalDeductions)}</span></div></div>
-            </div>
-            <div className="slip-tot"><span>NET PAY · {data.bank} · {data.accountNo}</span><span style={{ fontSize:22, color:"var(--accent)" }}>{money(data.netPay)}</span></div>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, padding:"14px 20px", background:"var(--accent-soft)" }}>
-              {[["YTD Gross",data.ytd.gross],["YTD Net",data.ytd.net],["YTD PF",data.ytd.pf],["YTD TDS",data.ytd.tax]].map(([l,v])=><div key={l}><div className="if-l">{l}</div><div style={{ fontWeight:800, color:"var(--accent)" }}>{money(v)}</div></div>)}
-            </div>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, padding:"12px 20px", background:"var(--raised)", borderTop:"1px solid var(--brd)" }}>
-              {[["Pay Date",data.payDate],["Payment Mode",data.paymentMode],["Payroll Status",data.payrollStatus],["Tax Regime",data.taxRegime]].map(([l,v])=><div key={l}><div className="if-l">{l}</div><div style={{ fontWeight:700 }}>{v}</div></div>)}
-            </div>
-            <div style={{ padding:"12px 20px", background:"var(--amber-soft)", borderTop:"1px solid var(--brd)" }}>
-              <div className="flbl" style={{ color:"var(--amber)", marginBottom:8 }}>Tax Computation</div>
-              <div className="info-grid">{[["Annual Gross",data.annualGross],["80C PF Deduction",data.annual80C],["Standard Deduction",50000],["Taxable Income",data.annualTaxableIncome],["Tax + Cess",data.annualTax],["Monthly TDS",data.tdsMonthly]].map(([k,v])=><div key={k} className="if"><div className="if-l">{k}</div><div style={{ fontWeight:700 }}>{money(v)}</div></div>)}</div>
+              <div style={{ padding:"12px 14px", borderRight:"1px solid var(--brd)", background:"var(--accent-soft)" }}>
+                <div className="flbl" style={{ color:"var(--accent)", marginBottom:6 }}>Year-to-Date</div>
+                <div style={{ display:"flex", gap:20, flexWrap:"wrap" }}>
+                  {[["Gross", data.ytd.gross], ["Net", data.ytd.net], ["PF", data.ytd.pf], ["TDS", data.ytd.tax]].map(([l, v]) => (
+                    <div key={l}><div className="if-l">{l}</div><div style={{ fontWeight:700, color:"var(--accent)", fontSize:13 }}>{money(v)}</div></div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ padding:"12px 14px", background:"var(--amber-soft)" }}>
+                <div className="flbl" style={{ color:"var(--amber)", marginBottom:6 }}>Tax Computation</div>
+                <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
+                  {[["Taxable", data.annualTaxableIncome], ["Annual Tax", data.annualTax], ["Monthly TDS", data.tdsMonthly], ["Employer PF", data.pfEmployer]].map(([l, v]) => (
+                    <div key={l}><div className="if-l">{l}</div><div style={{ fontWeight:700, color:"var(--amber)", fontSize:13 }}>{money(v)}</div></div>
+                  ))}
+                </div>
+              </div>
             </div>
           </>
         ) : (
@@ -2871,7 +3154,15 @@ const SalaryMod = ({ currentUser }) => {
           {PAYROLL_MONTHS.map(m=><option key={m}>{m}</option>)}
         </select>
       </div>
-      <div className="tabs">{(canRunTeamPayroll ? ["run","slip","bulk","history","configure"] : canRunOwnPayroll ? ["run","slip"] : ["slip"]).map(t=><div key={t} className={`tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>{t==="run"?"Payroll Run":t==="slip"?"Pay Slip":t==="bulk"?"Bulk Process":t==="configure"?"⚙ Configure":"History"}</div>)}</div>
+      <div className="tabs">{(
+        canRunTeamPayroll
+          ? (canConfigurePayroll(currentUser)
+              ? ["run","slip","bulk","history","configure"]
+              : ["run","slip","bulk","history"])
+          : canRunOwnPayroll
+            ? ["run","slip"]
+            : ["slip"]
+      ).map(t=><div key={t} className={`tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>{t==="run"?"Payroll Run":t==="slip"?"Pay Slip":t==="bulk"?"Bulk Process":t==="configure"?"⚙ Configure":"History"}</div>)}</div>
       <div className="sg">{payrollStats.map((s,i)=><div className="sc" key={i}><div className="sc-accent" style={{ background:s.c }}/><div className="sc-val" style={{ marginTop:10, fontSize:20 }}>{s.v}</div><div className="sc-lbl">{s.l}</div><div className="sc-sub">{s.s}</div></div>)}</div>
 
       {tab==="run"&&(
@@ -2945,7 +3236,7 @@ const SalaryMod = ({ currentUser }) => {
               <div style={{ background:"var(--raised)", border:"1px solid var(--brd)", borderRadius:"var(--r8)", padding:12, marginBottom:14 }}>
                 <div className="flbl" style={{ marginBottom:8 }}>Live Preview</div>
                 {canSeeSalary ? <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:8 }}>{[["Gross",preview.grossEarnings,"var(--green)"],["PF",preview.statutory.find(s=>s.code==="PF")?.amount || 0,"var(--purple)"],["TDS",preview.tdsMonthly,"var(--amber)"],["Deductions",preview.totalDeductions,"var(--red)"],["Net Pay",preview.netPay,"var(--accent)"]].map(([l,v,c])=><div key={l} style={{ background:"var(--surface)", border:"1px solid var(--brd)", borderRadius:"var(--r8)", padding:"9px 6px", textAlign:"center" }}><div style={{ fontWeight:800, color:c, fontSize:13 }}>{money(v)}</div><div className="t3" style={{ fontSize:10.5 }}>{l}</div></div>)}</div> : <div className="t3" style={{ textAlign:"center", padding:12 }}>Salary preview is confidential.</div>}
-                {canSeeSalary && !preview.esiEligible && <div style={{ marginTop:8, fontSize:11, color:"var(--accent)" }}>ESI is not applicable because gross salary exceeds ₹21,000/month.</div>}
+                {canSeeSalary && !preview.esiEligible && <div style={{ marginTop:8, fontSize:11, color:"var(--accent)" }}>ESI is not applicable because gross salary exceeds ₹{(getStat("esi_gross_limit",21000)).toLocaleString("en-IN")}/month.</div>}
               </div>
               <div style={{ display:"flex", gap:8 }}>
                 <button className="btn btn-p" disabled={!canEditPayroll} onClick={()=>setSlipFor(emp)}><Icon n="calc" s={13}/>Calculate & Generate Payslip</button>
@@ -2960,7 +3251,15 @@ const SalaryMod = ({ currentUser }) => {
         <div>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, marginBottom:12 }}>
             <div><div className="fw7" style={{ fontFamily:"var(--display)", fontSize:16 }}>{slip.employeeName}</div><div className="t3 tsm">{slip.month} payslip</div></div>
-            <div style={{ display:"flex", gap:7 }}><button className="btn" onClick={()=>downloadPayslip(slip)}><Icon n="dl" s={13}/>Download PDF</button><button className="btn btn-p" onClick={()=>{ setEmailModal(slip); setEmailTo(slip.email); setEmailStatus(""); }}><Icon n="mail" s={13}/>Send Email</button></div>
+            <div style={{ display:"flex", gap:7, alignItems:"center" }}>
+              {isPayslipReleased(slip)
+                ? <button className="btn" onClick={()=>downloadPayslip(slip)}><Icon n="dl" s={13}/>Download PDF</button>
+                : <span style={{ fontSize:11.5, color:"var(--amber)", background:"var(--amber-soft)", border:"1px solid rgba(176,96,16,0.2)", borderRadius:"var(--r6)", padding:"5px 10px" }}>
+                    PDF available once <b>Processed</b>
+                  </span>
+              }
+              <button className="btn btn-p" onClick={()=>{ setEmailModal(slip); setEmailTo(slip.email); setEmailStatus(""); }}><Icon n="mail" s={13}/>Send Email</button>
+            </div>
           </div>
           <div className="card" style={{ marginBottom:12 }}>
             <div className="ch">
@@ -2994,7 +3293,7 @@ const SalaryMod = ({ currentUser }) => {
         <div>
           <div className="card">
             <div className="ch"><div className="ct"><Icon n="users" s={14}/>Bulk Payroll Processing</div><button className="btn btn-p" onClick={runBulk} disabled={bulkRunning}>{bulkRunning ? "Processing..." : "Run Payroll for All"}</button></div>
-            {bulk.length === 0 ? <div className="cb t3">Run payroll to generate the monthly payroll register for {scopedEmps.length} employees.</div> : <div className="tw"><table><thead><tr>{["Employee","Dept","Gross","PF","ESI","PT","TDS","Deductions","Net Pay","Actions"].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{bulk.map(r=>{ const owner=ALL_USERS.find(e=>e.id===r.employeeId); const allowed=canViewPayrollOf(currentUser,r.employeeId); return <tr key={r.employeeId}><td><div style={{ display:"flex", alignItems:"center", gap:8 }}><div className="avt" style={{ width:26, height:26, background:owner.color }}>{owner.firstName[0]}{owner.lastName[0]}</div><div><div className="fw7">{owner.name}</div><div className="t3 tsm">{r.employeeId}</div></div></div></td><td><span className="bdg bdg-b">{r.department}</span></td>{allowed ? <><td className="fw6" style={{ color:"var(--green)" }}>{money(r.grossEarnings)}</td><td>{money(r.statutory.find(s=>s.code==="PF")?.amount || 0)}</td><td>{r.esiEligible ? money(r.statutory.find(s=>s.code==="ESI")?.amount || 0) : "N/A"}</td><td>{money(r.statutory.find(s=>s.code==="PT")?.amount || 0)}</td><td style={{ color:"var(--amber)" }}>{money(r.tdsMonthly)}</td><td style={{ color:"var(--red)" }}>{money(r.totalDeductions)}</td><td className="fw7" style={{ color:"var(--accent)" }}>{money(r.netPay)}</td></> : <td colSpan="7" className="t3">Confidential</td>}<td><div style={{ display:"flex", gap:4 }}><button className="btn btn-sm" onClick={()=>{ setSlip(r); setTab("slip"); }}><Icon n="eye" s={12}/></button>{allowed&&<button className="btn btn-sm" onClick={()=>downloadPayslip(r)}><Icon n="dl" s={12}/></button>}</div></td></tr>; })}</tbody></table></div>}
+            {bulk.length === 0 ? <div className="cb t3">Run payroll to generate the monthly payroll register for {scopedEmps.length} employees.</div> : <div className="tw"><table><thead><tr>{["Employee","Dept","Gross","PF","ESI","PT","TDS","Deductions","Net Pay","Actions"].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{bulk.map(r=>{ const owner=ALL_USERS.find(e=>e.id===r.employeeId); const allowed=canViewPayrollOf(currentUser,r.employeeId); return <tr key={r.employeeId}><td><div style={{ display:"flex", alignItems:"center", gap:8 }}><div className="avt" style={{ width:26, height:26, background:owner.color }}>{owner.firstName[0]}{owner.lastName[0]}</div><div><div className="fw7">{owner.name}</div><div className="t3 tsm">{r.employeeId}</div></div></div></td><td><span className="bdg bdg-b">{r.department}</span></td>{allowed ? <><td className="fw6" style={{ color:"var(--green)" }}>{money(r.grossEarnings)}</td><td>{money(r.statutory.find(s=>s.code==="PF")?.amount || 0)}</td><td>{r.esiEligible ? money(r.statutory.find(s=>s.code==="ESI")?.amount || 0) : "N/A"}</td><td>{money(r.statutory.find(s=>s.code==="PT")?.amount || 0)}</td><td style={{ color:"var(--amber)" }}>{money(r.tdsMonthly)}</td><td style={{ color:"var(--red)" }}>{money(r.totalDeductions)}</td><td className="fw7" style={{ color:"var(--accent)" }}>{money(r.netPay)}</td></> : <td colSpan="7" className="t3">Confidential</td>}<td><div style={{ display:"flex", gap:4 }}><button className="btn btn-sm" onClick={()=>{ setSlip(r); setTab("slip"); }}><Icon n="eye" s={12}/></button>{allowed&&isPayslipReleased(r)&&<button className="btn btn-sm" onClick={()=>downloadPayslip(r)}><Icon n="dl" s={12}/></button>}</div></td></tr>; })}</tbody></table></div>}
           </div>
           {bulk.length > 0&&<div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14 }}>{[["PF Challan",bulk.reduce((a,r)=>a+(r.statutory.find(s=>s.code==="PF")?.amount || 0)+r.pfEmployer,0),"var(--purple)"],["ESI Challan",bulk.reduce((a,r)=>a+(r.statutory.find(s=>s.code==="ESI")?.amount || 0)+r.esiEmployer,0),"var(--teal)"],["TDS + PT",bulk.reduce((a,r)=>a+r.tdsMonthly+(r.statutory.find(s=>s.code==="PT")?.amount || 0),0),"var(--amber)"]].map(([l,v,c])=><div key={l} className="card" style={{ marginBottom:0, borderTop:`3px solid ${c}` }}><div className="cb"><div className="flbl">{l}</div><div style={{ fontFamily:"var(--mono)", fontWeight:800, fontSize:18, color:c }}>{money(v)}</div></div></div>)}</div>}
         </div>
@@ -3013,7 +3312,7 @@ const SalaryMod = ({ currentUser }) => {
         </div>
       )}
 
-      {tab==="configure"&&canRunTeamPayroll&&(
+      {tab==="configure"&&canConfigurePayroll(currentUser)&&(
         <div>
           {/* ── Salary Structure ── */}
           <div className="card" style={{ marginBottom:14 }}>
@@ -3113,6 +3412,60 @@ const SalaryMod = ({ currentUser }) => {
               </div>
             </div>
           </div>
+
+          {/* ── Statutory Deduction Config ── */}
+          <div className="card" style={{ marginTop:14 }}>
+            <div className="ch">
+              <div>
+                <div className="ct">Statutory Deduction Rates</div>
+                <div className="t3 tsm">PF, ESI, Professional Tax and TDS rates stored in the database. Update when legislation changes.</div>
+              </div>
+              {statSaving && <span className="bdg bdg-a">Saving…</span>}
+            </div>
+            <div className="cb">
+              <div className="fg">
+                {[
+                  { key:"pf_rate_employee",       label:"PF Employee Rate",           unit:"%",  factor:100, desc:"Employee PF: % of basic salary (capped at PF ceiling)" },
+                  { key:"pf_rate_employer",       label:"PF Employer Rate",           unit:"%",  factor:100, desc:"Employer PF contribution rate" },
+                  { key:"pf_ceiling",             label:"PF Wage Ceiling",            unit:"₹",  factor:1,   desc:"PF is calculated on min(basic, ceiling). Current EPFO limit: ₹15,000" },
+                  { key:"esi_rate_employee",      label:"ESI Employee Rate",          unit:"%",  factor:100, desc:"Employee ESI: % of gross salary" },
+                  { key:"esi_rate_employer",      label:"ESI Employer Rate",          unit:"%",  factor:100, desc:"Employer ESI contribution rate" },
+                  { key:"esi_gross_limit",        label:"ESI Gross Salary Limit",     unit:"₹",  factor:1,   desc:"ESI applies only when monthly gross ≤ this amount" },
+                  { key:"tds_cess_rate",          label:"Health & Education Cess",    unit:"%",  factor:100, desc:"Cess applied on computed income tax (currently 4%)" },
+                  { key:"tds_80c_limit",          label:"Section 80C Annual Limit",   unit:"₹",  factor:1,   desc:"Max annual deduction under Section 80C" },
+                  { key:"tds_standard_deduction", label:"Standard Deduction",         unit:"₹",  factor:1,   desc:"Annual standard deduction for salaried employees" },
+                ].map(({ key, label, unit, factor, desc }) => {
+                  const rawStored = statCfg?.[key];
+                  const displayVal = rawStored !== undefined ? (unit === "%" ? (parseFloat(rawStored) * factor).toFixed(factor === 100 ? 2 : 0) : parseFloat(rawStored)) : "";
+                  const editVal = statEdit[key] !== undefined ? statEdit[key] : displayVal;
+                  return (
+                    <div key={key} className="fgrp">
+                      <div className="flbl" style={{ display:"flex", justifyContent:"space-between" }}>
+                        <span>{label}</span><span className="bdg bdg-r" style={{ fontSize:9 }}>Statutory</span>
+                      </div>
+                      <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                        <input className="finp" type="number" min="0" step={unit==="₹" ? 100 : 0.01}
+                          value={editVal}
+                          onChange={e => setStatEdit(p => ({ ...p, [key]: e.target.value }))}
+                          style={{ flex:1 }}/>
+                        <span className="t3" style={{ minWidth:16 }}>{unit}</span>
+                        <button className="btn btn-sm btn-p" disabled={statSaving}
+                          onClick={() => {
+                            // Convert display % back to decimal for storage
+                            const val = unit === "%" ? parseFloat(editVal) / factor : parseFloat(editVal);
+                            saveStatField(key, String(val));
+                          }}>Save</button>
+                      </div>
+                      <div className="t3 tsm">{desc}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ background:"var(--amber-soft)", border:"1px solid rgba(176,96,16,0.2)", borderRadius:"var(--r8)", padding:"10px 14px", fontSize:12, color:"var(--amber)", marginTop:8 }}>
+                <strong>PT and TDS slabs</strong> (JSON arrays) can be updated directly in the database via <code>payroll_statutory_config</code> table rows <code>pt_slab_json</code> and <code>tds_slab_json</code> when the government revises tax brackets.
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -3196,7 +3549,7 @@ const SalaryMod = ({ currentUser }) => {
 const DirectoryMod = ({ currentUser }) => {
   // Only Director + HR can browse all employees — everyone else sees only themselves
   const canViewDirectory = canOperatePayroll(currentUser);
-  const visibleEmps = canViewDirectory ? ALL_USERS : [currentUser];
+  const visibleEmps = useMemo(() => canViewDirectory ? ALL_USERS : [currentUser], [canViewDirectory, currentUser]);
   const [sel, setSel] = useState(currentUser.id);
   const [srch, setSrch] = useState("");
   const [fil, setFil] = useState("All");
@@ -3210,8 +3563,8 @@ const DirectoryMod = ({ currentUser }) => {
   // Local cache so saves are reflected immediately without re-fetching ALL_USERS
   const [recoveryEmails, setRecoveryEmails] = useState({});
 
-  const depts = ["All",...[...new Set(visibleEmps.map(e=>e.dept))]];
-  const filtered = visibleEmps.filter(e=>(fil==="All"||e.dept===fil)&&(e.name.toLowerCase().includes(srch.toLowerCase())||e.role.toLowerCase().includes(srch.toLowerCase())));
+  const depts = useMemo(() => ["All",...[...new Set(visibleEmps.map(e=>e.dept))]], [visibleEmps]);
+  const filtered = useMemo(() => visibleEmps.filter(e=>(fil==="All"||e.dept===fil)&&(e.name.toLowerCase().includes(srch.toLowerCase())||e.role.toLowerCase().includes(srch.toLowerCase()))), [visibleEmps, fil, srch]);
   const emp = visibleEmps.find(e=>e.id===sel)||currentUser;
   const canSeeSensitive = canSeeSensitiveOf(currentUser, sel);
   const getRecoveryEmail = id => recoveryEmails[id] !== undefined ? recoveryEmails[id] : (ALL_USERS.find(e=>e.id===id)?.recoveryEmail || "");
@@ -3971,16 +4324,18 @@ export default function AppBootstrap() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    // Fire three API calls simultaneously to minimise boot latency:
+    // Fire four API calls simultaneously to minimise boot latency:
     //   1. Full employee list (used everywhere)
     //   2. Payroll salary structure (basic%, HRA%, etc.) — soft-fails to defaults
     //   3. Admin-defined custom earning/deduction fields — soft-fails to empty list
+    //   4. Statutory deduction config (PF/ESI/PT/TDS rates) — soft-fails to null (engine uses built-in fallbacks)
     Promise.all([
       fetch(`${API_URL}/api/employees/all`).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
       fetch(`${API_URL}/api/payroll/structure`).then(r => r.json()).catch(() => ({ structure: [] })),
       fetch(`${API_URL}/api/payroll/field-configs`).then(r => r.json()).catch(() => ({ fieldConfigs: [] })),
+      fetch(`${API_URL}/api/payroll/statutory-config`).then(r => r.json()).catch(() => ({ statutoryConfig: [] })),
     ])
-      .then(([empData, structData, cfData]) => {
+      .then(([empData, structData, cfData, statData]) => {
         // Populate the module-level globals and mirror them on window so that
         // Vite HMR module re-evaluations (triggered by any file save) pick up
         // the already-fetched data instead of starting back at the empty defaults.
@@ -4003,6 +4358,18 @@ export default function AppBootstrap() {
         }));
         window.__HR_APP_CUSTOM_FIELDS__ = APP_CUSTOM_FIELDS;
 
+        // Build a flat key→value map from statutory config rows.
+        // JSON-valued keys (pt_slab_json, tds_slab_json) are parsed into arrays.
+        if ((statData.statutoryConfig || []).length) {
+          const sc = {};
+          statData.statutoryConfig.forEach(row => {
+            try { sc[row.config_key] = JSON.parse(row.value); }
+            catch { sc[row.config_key] = row.value; }
+          });
+          APP_STATUTORY_CFG = sc;
+        }
+        window.__HR_APP_STATUTORY_CFG__ = APP_STATUTORY_CFG;
+
         setReady(true);
       })
       .catch(() => setError("Could not connect to the server. Make sure the backend is running."));
@@ -4019,9 +4386,11 @@ export default function AppBootstrap() {
 // It owns the `currentUser` session and the active `page` ID, both of which
 // are passed down as props to every module component.
 function HRApp() {
-  const [currentUser, setCurrentUser] = useState(null);
-  const [page, setPage] = useState("dir");
-  const [clock, setClock] = useState(new Date());
+  const [currentUser, setCurrentUser] = useState(() => {
+    try { const s = localStorage.getItem("doloxe_user"); return s ? JSON.parse(s) : null; }
+    catch { return null; }
+  });
+  const [page, setPage] = useState(() => localStorage.getItem("doloxe_page") || "dir");
 
   // Security Settings modal state (Change Password + Recovery Email tabs)
   const [cpOpen, setCpOpen] = useState(false);
@@ -4082,11 +4451,84 @@ function HRApp() {
     finally { setReLoading(false); }
   };
 
-  // Start the clock ticker; clean up the interval on unmount.
-  useEffect(() => { const t = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(t); }, []);
+
+  // ── Notifications ──────────────────────────────────────────────────────────
+  const canReceiveNotifs = currentUser?.isHR || currentUser?.accessLevel >= 4;
+  const [notifs, setNotifs] = useState([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const notifRef = useRef(null);
+  const [pendingCounts, setPendingCounts] = useState({ leaves: 0, corrections: 0 });
+
+  const loadNotifs = useCallback(async () => {
+    if (!currentUser?.isHR && !(currentUser?.accessLevel >= 4)) return;
+    try {
+      const r = await fetch(`${API_URL}/api/notifications?recipient_id=${currentUser.id}`);
+      const d = await r.json();
+      setNotifs(d.notifications || []);
+    } catch { /* network error — retain last state */ }
+  }, [currentUser]);
+
+  const loadPendingCounts = useCallback(async () => {
+    if (!currentUser?.isHR && !(currentUser?.accessLevel >= 4)) return;
+    try {
+      const [lr, cr] = await Promise.all([
+        fetch(`${API_URL}/api/leaves?status=pending`).then(r => r.json()),
+        fetch(`${API_URL}/api/attendance/corrections?status=pending`).then(r => r.json()),
+      ]);
+      setPendingCounts({
+        leaves: (lr.leaveRequests || []).length,
+        corrections: (cr.corrections || []).length,
+      });
+    } catch { /* network error — retain last state */ }
+  }, [currentUser]);
+
+  useEffect(() => {
+    const refresh = async () => {
+      await Promise.all([loadNotifs(), loadPendingCounts()]);
+    };
+    refresh();
+    let t = setInterval(refresh, 10000);
+    const onVisibility = () => {
+      if (document.hidden) {
+        clearInterval(t);
+      } else {
+        refresh();
+        t = setInterval(refresh, 10000);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [loadNotifs, loadPendingCounts]);
+
+  useEffect(() => {
+    if (!notifOpen) return;
+    const handler = (e) => { if (notifRef.current && !notifRef.current.contains(e.target)) setNotifOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [notifOpen]);
+
+  const unreadCount = notifs.filter(n => !n.is_read).length;
+  const pendingTotal = pendingCounts.leaves + pendingCounts.corrections;
+  const badgeCount = pendingTotal > 0 ? pendingTotal : unreadCount;
+
+  const openNotifs = async () => {
+    setNotifOpen(true);
+    // Always fetch fresh notifications when opening the panel so every
+    // request submitted since the last poll is immediately visible.
+    try {
+      const r = await fetch(`${API_URL}/api/notifications?recipient_id=${currentUser.id}`);
+      const d = await r.json();
+      const fresh = d.notifications || [];
+      setNotifs(fresh);
+      if (fresh.some(n => !n.is_read)) {
+        await fetch(`${API_URL}/api/notifications/read-all?recipient_id=${currentUser.id}`, { method: "PUT" });
+        setNotifs(fresh.map(n => ({ ...n, is_read: true })));
+      }
+    } catch { /* ignore */ }
+  };
 
   // Gate the whole app behind login: if no session, render the login screen.
-  if (!currentUser) return (<><GS/><LoginScreen onLogin={u => { setCurrentUser(u); setPage("dir"); }}/></>);
+  if (!currentUser) return (<><GS/><LoginScreen onLogin={u => { localStorage.setItem("doloxe_user", JSON.stringify(u)); setCurrentUser(u); setPage("dir"); }}/></>);
 
   // Filter the page list to only those the current user's access level permits.
   const visiblePages = PAGES.filter(p => currentUser.accessLevel >= p.minLevel);
@@ -4110,7 +4552,6 @@ function HRApp() {
     }
   };
 
-  // Pending leave count is not pre-loaded at shell level — LeaveMod loads it when opened.
 
   return (
     <>
@@ -4132,8 +4573,51 @@ function HRApp() {
           </div>
 
           <div className="tb-right">
-            <div className="tb-clock">{clock.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</div>
-            <div className="tb-btn"><Icon n="bell" s={14}/></div>
+            <TopbarClock/>
+            {canReceiveNotifs && (
+              <div style={{ position:"relative" }} ref={notifRef}>
+                <div className="tb-btn" onClick={() => notifOpen ? setNotifOpen(false) : openNotifs()} style={{ position:"relative" }}>
+                  <Icon n="bell" s={14}/>
+                  {badgeCount > 0 && (
+                    <span style={{ position:"absolute", top:-5, right:-5, background:"var(--red)", color:"#fff", borderRadius:"50%", minWidth:16, height:16, fontSize:9, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, padding:"0 3px" }}>
+                      {badgeCount > 99 ? "99+" : badgeCount}
+                    </span>
+                  )}
+                </div>
+                {notifOpen && (
+                  <div style={{ position:"absolute", right:0, top:"calc(100% + 10px)", width:360, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, boxShadow:"0 8px 32px rgba(0,0,0,0.15)", zIndex:1000, maxHeight:480, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+                    <div style={{ padding:"12px 16px", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                      <span style={{ fontWeight:700, fontSize:14 }}>Notifications</span>
+                      <span style={{ fontSize:12, color:"var(--muted)" }}>
+                        {pendingTotal > 0
+                          ? [pendingCounts.leaves > 0 && `${pendingCounts.leaves} leave`, pendingCounts.corrections > 0 && `${pendingCounts.corrections} correction`].filter(Boolean).join(", ") + " pending"
+                          : unreadCount === 0 ? "All caught up" : `${unreadCount} unread`}
+                      </span>
+                    </div>
+                    <div style={{ overflowY:"auto", flex:1 }}>
+                      {notifs.length === 0
+                        ? <div style={{ padding:24, textAlign:"center", color:"var(--muted)", fontSize:13 }}>No notifications yet</div>
+                        : notifs.map(n => (
+                          <div key={n.id} onClick={() => { setPage(n.type === "leave_request" ? "leave" : "attendance"); setNotifOpen(false); }}
+                            style={{ padding:"12px 16px", borderBottom:"1px solid var(--border)", cursor:"pointer", background: n.is_read ? "transparent" : "rgba(27,69,245,0.04)", transition:"background 0.15s" }}
+                            onMouseEnter={e => e.currentTarget.style.background="var(--hover)"}
+                            onMouseLeave={e => e.currentTarget.style.background = n.is_read ? "transparent" : "rgba(27,69,245,0.04)"}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
+                              {!n.is_read && <span style={{ width:7, height:7, borderRadius:"50%", background:"var(--accent)", flexShrink:0 }}/>}
+                              <span style={{ fontWeight:600, fontSize:13 }}>{n.title}</span>
+                            </div>
+                            <div style={{ fontSize:12, color:"var(--muted)", marginLeft: n.is_read ? 0 : 15 }}>{n.message}</div>
+                            <div style={{ fontSize:11, color:"var(--muted)", marginTop:4, marginLeft: n.is_read ? 0 : 15 }}>
+                              {new Date(n.created_at).toLocaleString("en-IN", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}
+                            </div>
+                          </div>
+                        ))
+                      }
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="tb-user" onClick={() => { setCpOpen(true); setCpErr(""); setCpMsg(""); }} title="Change Password">
               <div className="avt" style={{ width:26, height:26, fontSize:9, background:currentUser.color }}>{currentUser.firstName[0]}{currentUser.lastName[0]}</div>
               <div>
@@ -4141,7 +4625,7 @@ function HRApp() {
                 <div className="tb-urole">{currentUser.role.split("/")[0].trim()}</div>
               </div>
             </div>
-            <button className="btn btn-sm" style={{ color:"var(--red)", borderColor:"rgba(200,49,42,0.2)", background:"var(--red-soft)" }} onClick={()=>setCurrentUser(null)}>
+            <button className="btn btn-sm" style={{ color:"var(--red)", borderColor:"rgba(200,49,42,0.2)", background:"var(--red-soft)" }} onClick={()=>{ localStorage.removeItem("doloxe_user"); setCurrentUser(null); }}>
               <Icon n="logout" s={12}/>
             </button>
           </div>
@@ -4164,7 +4648,7 @@ function HRApp() {
             <div key={grp}>
               <div className="sb-section-label">{grp}</div>
               {visiblePages.filter(p => p.grp === grp).map(p => (
-                <div key={p.id} className={`sb-item${page===p.id?" active":""}`} onClick={()=>setPage(p.id)}>
+                <div key={p.id} className={`sb-item${page===p.id?" active":""}`} onClick={()=>{ localStorage.setItem("doloxe_page", p.id); setPage(p.id); }}>
                   <Icon n={p.i} s={14}/>
                   <span style={{ flex:1 }}>{p.l}</span>
                 </div>
@@ -4174,7 +4658,7 @@ function HRApp() {
 
           <div style={{ flex:1 }}/>
           <div className="sb-divider"/>
-          <div className="sb-item" onClick={()=>setCurrentUser(null)} style={{ color:"var(--red)", margin:"0 6px" }}>
+          <div className="sb-item" onClick={()=>{ localStorage.removeItem("doloxe_user"); setCurrentUser(null); }} style={{ color:"var(--red)", margin:"0 6px" }}>
             <Icon n="logout" s={14}/><span>Sign Out</span>
           </div>
         </div>

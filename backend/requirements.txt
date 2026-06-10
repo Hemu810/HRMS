@@ -1,7 +1,7 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 SQLAlchemy==2.0.36
-pyodbc==5.2.0
+pymssql==2.3.1          # MSSQL driver — works on Linux (Render) and Windows (IIS)
 pydantic==2.11.5
 email-validator==2.2.0
 python-multipart==0.0.20
@@ -9,3 +9,6 @@ python-multipart==0.0.20
 passlib[bcrypt]==1.7.4      # bcrypt password hashing
 bcrypt==4.0.1               # pin to last version compatible with passlib 1.7.4
 python-jose[cryptography]==3.3.0  # JWT signing / verification
+# ── Windows / IIS only (optional) ────────────────────────────────────────────
+# pyodbc                    # uncomment on IIS if you prefer the Microsoft ODBC Driver
+#                           # and set DATABASE_URL=mssql+pyodbc://...?driver=ODBC+Driver+17+for+SQL+Server
