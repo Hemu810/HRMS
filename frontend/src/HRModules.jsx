@@ -345,15 +345,23 @@ const GS = () => (
     .ftxt { resize: vertical; min-height: 70px; line-height: 1.6; }
 
     /* ── MODAL ───────────────────────────────────────────────────────────── */
-    /* Backdrop blurs and dims the page; the modal card slides up on open. */
+    /* Backdrop blurs and dims the page; the modal card slides up on open.
+       backdrop-filter is on ::before (not .mo itself) so Chrome does not
+       create a new containing block — which would trap Chrome's native
+       date-picker calendar inside .mo and prevent it from rendering. */
     .mo {
       position: fixed; inset: 0;
-      background: rgba(8,12,25,0.48);
-      backdrop-filter: blur(7px) saturate(1.5);
-      -webkit-backdrop-filter: blur(7px) saturate(1.5);
       z-index: 300;
       display: flex; align-items: center; justify-content: center;
       animation: mofade 0.15s ease;
+    }
+    .mo::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: rgba(8,12,25,0.48);
+      backdrop-filter: blur(7px) saturate(1.5);
+      -webkit-backdrop-filter: blur(7px) saturate(1.5);
+      pointer-events: none;
     }
     @keyframes mofade { from { opacity: 0 } to { opacity: 1 } }
     .modal {
