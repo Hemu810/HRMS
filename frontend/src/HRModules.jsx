@@ -346,17 +346,20 @@ const GS = () => (
 
     /* ── MODAL ───────────────────────────────────────────────────────────── */
     /* Backdrop blurs and dims the page; the modal card slides up on open.
-       backdrop-filter is on ::before (not .mo itself) so Chrome does not
-       create a new containing block — which would trap Chrome's native
-       date-picker calendar inside .mo and prevent it from rendering. */
+       .mo-backdrop is a sibling div (not an ancestor) of .modal so that:
+         - Chrome: backdrop-filter is not on any ancestor of the date inputs,
+           preventing Chrome from creating a containing block that traps the
+           native date-picker calendar popup.
+         - Safari: backdrop-filter on a sibling never blurs the modal card
+           itself (Safari blurs all children of the filtered element, so
+           putting it on .mo directly or on ::before inside .mo breaks Safari). */
     .mo {
       position: fixed; inset: 0;
       z-index: 300;
       display: flex; align-items: center; justify-content: center;
       animation: mofade 0.15s ease;
     }
-    .mo::before {
-      content: '';
+    .mo-backdrop {
       position: absolute; inset: 0;
       background: rgba(8,12,25,0.48);
       backdrop-filter: blur(7px) saturate(1.5);
@@ -365,6 +368,7 @@ const GS = () => (
     }
     @keyframes mofade { from { opacity: 0 } to { opacity: 1 } }
     .modal {
+      position: relative; z-index: 1;
       background: var(--surface); border-radius: var(--r16);
       border: 1px solid var(--brd); box-shadow: var(--shadow-xl);
       width: 520px; max-width: 96vw; max-height: 88vh;
@@ -633,6 +637,7 @@ const Icon = ({ n, s = 15 }) => {
 
 const Modal = ({ title, onClose, children, footer, wide }) => createPortal(
   <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo-backdrop" onClick={onClose} />
     <div className={`modal${wide ? " modal-w" : ""}`}>
       <div className="mh"><div className="mt">{title}</div><button className="mc" onClick={onClose}><Icon n="x" s={13}/></button></div>
       <div className="mb">{children}</div>
