@@ -501,6 +501,23 @@ notifications_table = Table(
 )
 
 
+goals_table = Table(
+    "goals",
+    metadata,
+    Column("id",          BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
+    Column("employee_id", String(20),   nullable=False),
+    Column("title",       String(200),  nullable=False),
+    Column("target",      String(300),  nullable=True),
+    Column("notes",       String(500),  nullable=True),
+    Column("is_key",      Boolean,      nullable=False, default=False),
+    Column("progress",    Integer,      nullable=False, default=0),
+    Column("status",      String(20),   nullable=False, default="on-track"),  # on-track | at-risk
+    Column("quarter",     String(10),   nullable=False),   # e.g. Q2-2026
+    Column("created_at",  DateTime,     nullable=False, default=datetime.utcnow),
+    Column("updated_at",  DateTime,     nullable=False, default=datetime.utcnow),
+)
+
+
 # ── Serialisation helpers ─────────────────────────────────────────────────────
 
 def serialize(value: Any):
@@ -1673,3 +1690,46 @@ def mark_all_notifications_read(recipient_id: str):
             )
             .values(is_read=True)
         )
+
+
+# ── Goals ─────────────────────────────────────────────────────────────────────
+
+def fetch_goals(employee_id: str, quarter: str = None):
+    """Returns all goals for an employee, optionally filtered by quarter."""
+    with engine.connect() as conn:
+        q = select(goals_table).where(goals_table.c.employee_id == employee_id)
+        if quarter:
+            q = q.where(goals_table.c.quarter == quarter)
+        q = q.order_by(goals_table.c.created_at.desc())
+        rows = conn.execute(q).fetchall()
+    return [{k: serialize(v) for k, v in r._mapping.items()} for r in rows]
+
+
+def create_goal(employee_id: str, title: str, target: str, notes: str,
+                is_key: bool, progress: int, status: str, quarter: str):
+    now = datetime.utcnow()
+    with engine.begin() as conn:
+        result = conn.execute(
+            insert(goals_table).values(
+                employee_id=employee_id, title=title, target=target, notes=notes,
+                is_key=is_key, progress=progress, status=status, quarter=quarter,
+                created_at=now, updated_at=now,
+            )
+        )
+        row = conn.execute(
+            select(goals_table).where(goals_table.c.id == result.inserted_primary_key[0])
+        ).first()
+    return {k: serialize(v) for k, v in row._mapping.items()}
+
+
+def update_goal(goal_id: int, **fields):
+    fields["updated_at"] = datetime.utcnow()
+    with engine.begin() as conn:
+        conn.execute(update(goals_table).where(goals_table.c.id == goal_id).values(**fields))
+        row = conn.execute(select(goals_table).where(goals_table.c.id == goal_id)).first()
+    return {k: serialize(v) for k, v in row._mapping.items()}
+
+
+def delete_goal(goal_id: int):
+    with engine.begin() as conn:
+        conn.execute(sql_delete(goals_table).where(goals_table.c.id == goal_id))

@@ -105,6 +105,11 @@ from db import (
     fetch_notifications,
     mark_notification_read,
     mark_all_notifications_read,
+    # goals
+    fetch_goals,
+    create_goal,
+    update_goal,
+    delete_goal,
     # init
     init_database,
 )
@@ -568,8 +573,9 @@ def clock_out(payload: dict):
         emp_id = payload["employeeId"]
         clock_time = payload.get("time")
         hours = payload.get("hoursWorked")
+        status = payload.get("status", "present")
         today = date.today()
-        record = upsert_attendance(emp_id, today, "present", clock_out=clock_time, hours_worked=hours)
+        record = upsert_attendance(emp_id, today, status, clock_out=clock_time, hours_worked=hours)
         return {"ok": True, "record": record}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -961,6 +967,52 @@ def read_notif(notif_id: int):
     """Marks a single notification as read."""
     mark_notification_read(notif_id)
     return {"ok": True}
+
+
+# ── Goals endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/api/goals")
+def get_goals(employee_id: str = Query(...), quarter: str = Query(None)):
+    return {"goals": fetch_goals(employee_id, quarter)}
+
+
+@app.post("/api/goals")
+def post_goal(payload: dict):
+    try:
+        g = create_goal(
+            employee_id=payload["employeeId"],
+            title=payload["title"],
+            target=payload.get("target", ""),
+            notes=payload.get("notes", ""),
+            is_key=bool(payload.get("isKey", False)),
+            progress=int(payload.get("progress", 0)),
+            status=payload.get("status", "on-track"),
+            quarter=payload["quarter"],
+        )
+        return {"ok": True, "goal": g}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/goals/{goal_id}")
+def patch_goal(goal_id: int, payload: dict):
+    allowed = {"title", "target", "notes", "is_key", "progress", "status"}
+    fields = {k: v for k, v in payload.items() if k in allowed}
+    if not fields:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    try:
+        return {"ok": True, "goal": update_goal(goal_id, **fields)}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/goals/{goal_id}")
+def del_goal(goal_id: int):
+    try:
+        delete_goal(goal_id)
+        return {"ok": True}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ── Dev server entry point ────────────────────────────────────────────────────

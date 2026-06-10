@@ -199,6 +199,22 @@ const GS = () => (
     }
     .sb-item svg { width: 15px; height: 15px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
     .sb-divider { height: 1px; background: var(--brd); margin: 8px 10px; }
+    .sb-signout {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      margin: 6px 10px 2px; padding: 9px 14px;
+      border-radius: var(--r8); cursor: pointer;
+      font-size: 12.5px; font-weight: 700; letter-spacing: 0.1px;
+      color: var(--red);
+      background: var(--red-soft);
+      border: 1.5px solid rgba(220,38,38,0.22);
+      transition: background 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.1s;
+      user-select: none;
+    }
+    .sb-signout:hover {
+      background: #fde0e0; border-color: rgba(220,38,38,0.42);
+      box-shadow: 0 2px 10px rgba(220,38,38,0.15);
+    }
+    .sb-signout:active { transform: translateY(1px); box-shadow: none; }
 
     /* ── APP SHELL & MAIN CONTENT ────────────────────────────────────────── */
     .app { display: flex; height: 100vh; width: 100%; overflow: hidden; background: var(--paper); }
@@ -585,6 +601,13 @@ const GS = () => (
 
     /* Form field bottom margin helper */
     .login-field { margin-bottom: 14px; }
+
+    /* ── LOGIN RESPONSIVE ─────────────────────────────────────────────────── */
+    @media (max-width: 860px) {
+      .login-left { display: none !important; }
+      .login-right { padding: 32px 24px !important; }
+      .login-mobile-logo { display: flex !important; align-items: center; gap: 10px; margin-bottom: 28px; }
+    }
   `}</style>
 );
 
@@ -918,7 +941,7 @@ const LoginScreen = ({ onLogin }) => {
     <div style={{ position:"fixed", top:0, left:0, right:0, bottom:0, display:"flex", flexDirection:"row", fontFamily:"Inter, 'Plus Jakarta Sans', sans-serif", overflow:"hidden" }}>
 
       {/* ── LEFT PANEL ── */}
-      <div style={{ width:"60%", flexShrink:0, display:"flex", flexDirection:"column", justifyContent:"space-between", background:"linear-gradient(135deg, #0f172a 0%, #1e1b4b 40%, #1e3a8a 100%)", padding:"48px 52px", boxSizing:"border-box" }}>
+      <div className="login-left" style={{ width:"60%", flexShrink:0, display:"flex", flexDirection:"column", justifyContent:"space-between", background:"linear-gradient(135deg, #0f172a 0%, #1e1b4b 40%, #1e3a8a 100%)", padding:"48px 52px", boxSizing:"border-box" }}>
         {/* Logo mark */}
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
           <div style={{ width:42, height:42, display:"flex", alignItems:"center", justifyContent:"center", borderRadius:12, background:"rgba(255,255,255,0.12)", backdropFilter:"blur(8px)", border:"1px solid rgba(255,255,255,0.15)", flexShrink:0 }}>
@@ -956,9 +979,11 @@ const LoginScreen = ({ onLogin }) => {
       </div>
 
       {/* ── RIGHT PANEL ── */}
-      <div style={{ flex:1, display:"flex", flexDirection:"column", justifyContent:"center", overflowY:"auto", background:"#f8fafc", padding:"48px 44px", boxSizing:"border-box" }}>
-        {/* Mobile logo — only visible if left panel were hidden */}
-        <div style={{ display:"none" }}>
+      <div className="login-right" style={{ flex:1, display:"flex", flexDirection:"column", overflowY:"auto", background:"#f8fafc", padding:"48px 44px", boxSizing:"border-box" }}>
+        {/* Inner wrapper — margin:auto centers content without cutting off the top on overflow */}
+        <div style={{ margin:"auto 0", width:"100%" }}>
+        {/* Mobile logo — only visible when left panel is hidden */}
+        <div style={{ display:"none" }} className="login-mobile-logo">
           <div style={{ width:32, height:32, background:"#0f172a", borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center" }}>
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
@@ -1065,6 +1090,7 @@ const LoginScreen = ({ onLogin }) => {
           Passwords:&nbsp;
           <span style={{ fontFamily:"ui-monospace, monospace" }}>dir123 / mgr123 / lead123 / emp123</span>
         </p>
+        </div>{/* end inner centering wrapper */}
       </div>
 
       {/* ── Forgot Password overlay ── */}
@@ -1188,6 +1214,7 @@ const AttendanceMod = ({ currentUser }) => {
   const [checkedIn, setCheckedIn] = useState(false);
   const [checkInTime, setCheckInTime] = useState(null);
   const [checkOutTime, setCheckOutTime] = useState(null);
+  const checkInDateRef = useRef(null);
   // Employee selected in the calendar "team view" picker (defaults to self).
   const [selEmpId, setSelEmpId] = useState(currentUser.id);
   // Status filter for the Team Today tab.
@@ -1261,24 +1288,29 @@ const AttendanceMod = ({ currentUser }) => {
   const handleCheckIn = async () => {
     const now = new Date();
     const t = now.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
-    const minutes = now.getHours() * 60 + now.getMinutes();
-    const status = minutes > 660 ? "absent" : minutes >= 630 ? "late" : "present";
+    checkInDateRef.current = now;
     setCheckedIn(true); setCheckInTime(t);
-    setAttendance(prev => ({ ...prev, [currentUser.id]: { ...(prev[currentUser.id]||{}), [todayStr]: status } }));
+    setAttendance(prev => ({ ...prev, [currentUser.id]: { ...(prev[currentUser.id]||{}), [todayStr]: "present" } }));
     try {
       await fetch(`${API_URL}/api/attendance/clock-in`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ employeeId: currentUser.id, time: t, status }),
+        body: JSON.stringify({ employeeId: currentUser.id, time: t, status: "present" }),
       });
     } catch { /* fire-and-forget */ }
   };
   const handleCheckOut = async () => {
-    const t = new Date().toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
+    const now = new Date();
+    const t = now.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
+    const hoursWorked = checkInDateRef.current
+      ? (now - checkInDateRef.current) / 3600000
+      : null;
+    const status = hoursWorked !== null && hoursWorked < 4 ? "late" : "present";
     setCheckOutTime(t); setCheckedIn(false);
+    setAttendance(prev => ({ ...prev, [currentUser.id]: { ...(prev[currentUser.id]||{}), [todayStr]: status } }));
     try {
       await fetch(`${API_URL}/api/attendance/clock-out`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ employeeId: currentUser.id, time: t }),
+        body: JSON.stringify({ employeeId: currentUser.id, time: t, status }),
       });
     } catch { /* fire-and-forget */ }
   };
@@ -1439,7 +1471,7 @@ const AttendanceMod = ({ currentUser }) => {
         {[
           { v:myStats.present, l:"Days Present", s:monthLabel(selMonth), c:"#0F8C5A" },
           { v:myStats.absent,  l:"Days Absent",  s:"Unauthorised",       c:"#C8312A" },
-          { v:myStats.late,    l:"Late Arrivals", s:"10:30–11:00 AM",    c:"#B06010" },
+          { v:myStats.late,    l:"Late Arrivals", s:"< 4 hrs worked",    c:"#B06010" },
           { v:canViewTeam ? `${teamToday.filter(x=>x.status==="present"||x.status==="late").length}/${teamToday.length}` : `${Math.round((myStats.present+myStats.late)/(dim-myStats.holidays-8)*100)||0}%`,
             l:canViewTeam?"Team Present Today":"My Attendance Rate", s:canViewTeam?"As of now":"This month", c:"#5C35C2" },
         ].map((s,i)=>(
@@ -1485,7 +1517,7 @@ const AttendanceMod = ({ currentUser }) => {
                       <td style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--green)" }}>{isToday&&checkInTime?checkInTime:mockIn||"—"}</td>
                       <td style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--red)" }}>{isToday&&checkOutTime?checkOutTime:mockOut||"—"}</td>
                       <td style={{ fontFamily:"var(--mono)", fontSize:12 }}>{isToday&&checkOutTime?"8h 40m":st==="present"||st==="late"?"9h 10m":"—"}</td>
-                      <td className="t3 tsm">{st==="late"?"10:30–11:00 AM window":st==="absent"?"Unmarked":st==="leave"?"Approved leave":st==="holiday"?"Public holiday":"—"}</td>
+                      <td className="t3 tsm">{st==="late"?"< 4 hours worked":st==="absent"?"Unmarked":st==="leave"?"Approved leave":st==="holiday"?"Public holiday":"—"}</td>
                     </tr>
                   );
                 }).filter(Boolean)}
@@ -3862,18 +3894,62 @@ const OrgMod = ({ currentUser }) => {
 // ─── PERFORMANCE ───────────────────────────────────────────────────────────────
 const PerfMod = ({ currentUser }) => {
   const [tab, setTab] = useState("goals");
-  const goals   = [];
+  const [goals, setGoals] = useState([]);
+  const [goalsLoading, setGoalsLoading] = useState(true);
+  const [showGoalModal, setShowGoalModal] = useState(false);
+  const [gTitle, setGTitle]     = useState("");
+  const [gTarget, setGTarget]   = useState("");
+  const [gNotes, setGNotes]     = useState("");
+  const [gProgress, setGProgress] = useState(0);
+  const [gStatus, setGStatus]   = useState("on-track");
+  const [gIsKey, setGIsKey]     = useState(false);
+  const [gSaving, setGSaving]   = useState(false);
   const reviews = [];
   const skills  = [];
   const visibleEmps = getVisibleEmps(currentUser);
+  const quarter = currentQuarterLabel();
+
+  useEffect(() => {
+    setGoalsLoading(true);
+    fetch(`${API_URL}/api/goals?employee_id=${currentUser.id}`)
+      .then(r => r.json())
+      .then(d => setGoals(d.goals || []))
+      .catch(() => {})
+      .finally(() => setGoalsLoading(false));
+  }, [currentUser.id]);
+
+  const openGoalModal = () => {
+    setGTitle(""); setGTarget(""); setGNotes(""); setGProgress(0); setGStatus("on-track"); setGIsKey(false);
+    setShowGoalModal(true);
+  };
+
+  const handleAddGoal = async () => {
+    if (!gTitle.trim()) return;
+    setGSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/goals`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employeeId: currentUser.id, title: gTitle.trim(), target: gTarget.trim(), notes: gNotes.trim(), isKey: gIsKey, progress: Number(gProgress), status: gStatus, quarter }),
+      });
+      const data = await res.json();
+      if (data.ok) { setGoals(p => [data.goal, ...p]); setShowGoalModal(false); }
+    } catch { /* ignore */ } finally { setGSaving(false); }
+  };
+
+  const handleDeleteGoal = async (id) => {
+    if (!window.confirm("Delete this goal?")) return;
+    setGoals(p => p.filter(g => g.id !== id));
+    try { await fetch(`${API_URL}/api/goals/${id}`, { method: "DELETE" }); } catch { /* ignore */ }
+  };
+
   return (
     <div>
-      <div className="ph"><div><div className="ph-eyebrow">People</div><div className="ph-title">Performance</div><div className="ph-sub">Goals, OKRs, review cycles and skill scores</div></div><button className="btn btn-p"><Icon n="plus" s={13}/>Add Goal</button></div>
+      <div className="ph"><div><div className="ph-eyebrow">People</div><div className="ph-title">Performance</div><div className="ph-sub">Goals, OKRs, review cycles and skill scores</div></div><button className="btn btn-p" onClick={openGoalModal}><Icon n="plus" s={13}/>Add Goal</button></div>
       <div className="sg">{[
         { v:currentUser.perf,l:"My Perf Score",s:"Last review",c:"#0F8C5A" },
         { v:goals.filter(g=>g.status==="on-track").length,l:"On Track",s:"Active goals",c:"#1B45F5" },
         { v:goals.filter(g=>g.status==="at-risk").length,l:"At Risk",s:"Need attention",c:"#B06010" },
-        { v:currentQuarterLabel(),l:"Current Quarter",s:"Review cycle",c:"#5C35C2" },
+        { v:quarter,l:"Current Quarter",s:"Review cycle",c:"#5C35C2" },
       ].map((s,i)=>(
         <div className="sc" key={i}>
           <div className="sc-accent" style={{ background:s.c }}/>
@@ -3883,10 +3959,23 @@ const PerfMod = ({ currentUser }) => {
         </div>
       ))}</div>
       <div className="tabs">{["goals","reviews","skills",...(canManage(currentUser)?["team"]:[])].map(t=><div key={t} className={`tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>{t==="goals"?"My Goals":t==="reviews"?"Reviews":t==="skills"?"Skills":"Team"}</div>)}</div>
-      {tab==="goals"&&<div className="card"><div className="ch"><div className="ct"><Icon n="target" s={14}/>My Goals — {currentQuarterLabel()}</div></div><div style={{ padding:0 }}>{goals.map((g,i)=>(<div key={i} style={{ padding:"12px 14px",borderBottom:"1px solid var(--brd)" }}><div style={{ display:"flex",alignItems:"flex-start",gap:10,marginBottom:6 }}><div style={{ flex:1 }}><div style={{ display:"flex",alignItems:"center",gap:7,marginBottom:2 }}><div className="fw7" style={{ fontSize:13 }}>{g.title}</div>{g.key&&<span className="bdg bdg-p" style={{ fontSize:9.5 }}>KEY</span>}</div><div className="t3 tsm">Target: {g.target} · {g.notes}</div></div><span className={`bdg ${g.status==="on-track"?"bdg-g":"bdg-a"}`}>{g.status==="on-track"?"On Track":"At Risk"}</span><span style={{ fontFamily:"var(--mono)",fontWeight:750,color:g.progress>=75?"var(--green)":"var(--amber)",minWidth:38,textAlign:"right" }}>{g.progress}%</span></div><div className="pt" style={{ height:5 }}><div className="pf" style={{ width:`${g.progress}%`,background:g.status==="on-track"?"var(--green)":"var(--amber)" }}/></div></div>))}</div></div>}
+      {tab==="goals"&&<div className="card"><div className="ch"><div className="ct"><Icon n="target" s={14}/>My Goals — {quarter}</div></div><div style={{ padding:0 }}>{goalsLoading?<div className="cb t3 tsm" style={{ textAlign:"center",padding:24 }}>Loading…</div>:goals.length===0?<div className="cb t3 tsm" style={{ textAlign:"center",padding:32 }}>No goals yet — click <strong>Add Goal</strong> to get started.</div>:goals.map((g)=>(<div key={g.id} style={{ padding:"12px 14px",borderBottom:"1px solid var(--brd)" }}><div style={{ display:"flex",alignItems:"flex-start",gap:10,marginBottom:6 }}><div style={{ flex:1 }}><div style={{ display:"flex",alignItems:"center",gap:7,marginBottom:2 }}><div className="fw7" style={{ fontSize:13 }}>{g.title}</div>{g.is_key&&<span className="bdg bdg-p" style={{ fontSize:9.5 }}>KEY</span>}</div>{(g.target||g.notes)&&<div className="t3 tsm">{g.target?"Target: "+g.target:""}{g.target&&g.notes?" · ":""}{g.notes}</div>}</div><span className={`bdg ${g.status==="on-track"?"bdg-g":"bdg-a"}`}>{g.status==="on-track"?"On Track":"At Risk"}</span><span style={{ fontFamily:"var(--mono)",fontWeight:750,color:g.progress>=75?"var(--green)":"var(--amber)",minWidth:38,textAlign:"right" }}>{g.progress}%</span><button className="btn btn-sm" style={{ padding:"3px 7px",color:"var(--red)",background:"var(--red-soft)",borderColor:"transparent" }} onClick={()=>handleDeleteGoal(g.id)}><Icon n="x" s={11}/></button></div><div className="pt" style={{ height:5 }}><div className="pf" style={{ width:`${g.progress}%`,background:g.status==="on-track"?"var(--green)":"var(--amber)" }}/></div></div>))}</div></div>}
       {tab==="reviews"&&<div className="card"><div className="ch"><div className="ct"><Icon n="star" s={14}/>Review Cycles</div></div><div className="cb">{reviews.map((r,i)=>(<div key={i} className="review-card"><div style={{ display:"flex",alignItems:"center",gap:12 }}>{r.score?<div className="score-circle" style={{ background:r.score>=4.5?"var(--green-soft)":"var(--accent-soft)",color:r.score>=4.5?"var(--green)":"var(--accent)" }}>{r.score}</div>:<div className="score-circle" style={{ background:"var(--raised)",color:"var(--ink4)",fontSize:12 }}>TBD</div>}<div style={{ flex:1 }}><div style={{ display:"flex",gap:7,alignItems:"center",marginBottom:3 }}><div className="fw7" style={{ fontSize:13 }}>{r.period}</div>{r.status==="complete"?<span className="bdg bdg-g">Done</span>:<span className="bdg bdg-a">Upcoming</span>}</div><div className="t3 tsm">{r.manager} · {r.date}</div>{r.feedback&&<div style={{ fontSize:12,color:"var(--ink2)",marginTop:6,padding:"6px 10px",background:"var(--raised)",borderRadius:"var(--r8)",borderLeft:"2px solid var(--accent)" }}>{r.feedback}</div>}</div></div></div>))}</div></div>}
       {tab==="skills"&&<div className="card"><div className="ch"><div className="ct"><Icon n="star" s={14}/>Competency Scores</div></div><div className="cb">{skills.map((sk,i)=>(<div className="lbar" key={i}><div style={{ minWidth:180 }}><div style={{ fontWeight:650,fontSize:13 }}>{sk.name}</div></div><div style={{ flex:1,margin:"0 12px" }} className="lbar-t"><div className="lbar-f" style={{ width:`${(sk.score/5)*100}%`,background:sk.score>=4.5?"var(--green)":sk.score>=4?"var(--accent)":"var(--amber)" }}/></div><div style={{ minWidth:50,textAlign:"right" }}><span style={{ fontFamily:"var(--mono)",fontWeight:750,fontSize:14,color:sk.score>=4.5?"var(--green)":sk.score>=4?"var(--accent)":"var(--amber)" }}>{sk.score}</span><span className="t3" style={{ fontSize:11 }}>/5</span></div></div>))}</div></div>}
       {tab==="team"&&canManage(currentUser)&&<div className="card"><div className="ch"><div className="ct"><Icon n="users" s={14}/>Team Performance</div></div><div className="tw"><table><thead><tr><th>Employee</th><th>Role</th><th>Score</th><th>Rating</th></tr></thead><tbody>{visibleEmps.filter(e=>e.id!==currentUser.id).map(e=><tr key={e.id}><td><div style={{ display:"flex",alignItems:"center",gap:8 }}><div className="avt" style={{ width:26,height:26,background:e.color }}>{e.firstName[0]}{e.lastName[0]}</div><div className="fw7">{e.name}</div></div></td><td className="t3 tsm">{e.role}</td><td><span style={{ fontFamily:"var(--mono)",fontWeight:750,color:e.perf>=4.5?"var(--green)":e.perf>=4?"var(--accent)":"var(--amber)" }}>{e.perf}</span></td><td><span className={`bdg ${e.perf>=4.5?"bdg-g":e.perf>=4?"bdg-b":"bdg-a"}`}>{e.perf>=4.5?"Excellent":e.perf>=4?"Good":"Needs Work"}</span></td></tr>)}</tbody></table></div></div>}
+
+      {showGoalModal&&<Modal title="Add Goal" onClose={()=>setShowGoalModal(false)} footer={
+        <><button className="btn btn-ghost" onClick={()=>setShowGoalModal(false)}>Cancel</button><button className="btn btn-p" onClick={handleAddGoal} disabled={!gTitle.trim()||gSaving}>{gSaving?"Saving…":"Add Goal"}</button></>
+      }>
+        <div className="fg">
+          <div className="ff" style={{ gridColumn:"1/-1" }}><label className="flbl">Goal Title *</label><input className="finp" placeholder="e.g. Improve customer satisfaction score" value={gTitle} onChange={e=>setGTitle(e.target.value)}/></div>
+          <div className="ff"><label className="flbl">Target / Metric</label><input className="finp" placeholder="e.g. NPS ≥ 70" value={gTarget} onChange={e=>setGTarget(e.target.value)}/></div>
+          <div className="ff"><label className="flbl">Status</label><select className="fsel" value={gStatus} onChange={e=>setGStatus(e.target.value)}><option value="on-track">On Track</option><option value="at-risk">At Risk</option></select></div>
+          <div className="ff" style={{ gridColumn:"1/-1" }}><label className="flbl">Progress — {gProgress}%</label><input type="range" min={0} max={100} value={gProgress} onChange={e=>setGProgress(e.target.value)} style={{ width:"100%",accentColor:"var(--accent)",display:"block",marginTop:6 }}/></div>
+          <div className="ff" style={{ gridColumn:"1/-1" }}><label className="flbl">Notes</label><textarea className="ftxt" rows={2} placeholder="Any additional context…" value={gNotes} onChange={e=>setGNotes(e.target.value)}/></div>
+          <div className="ff" style={{ gridColumn:"1/-1" }}><label style={{ display:"flex",alignItems:"center",gap:8,cursor:"pointer" }}><input type="checkbox" checked={gIsKey} onChange={e=>setGIsKey(e.target.checked)} style={{ accentColor:"var(--accent)",width:15,height:15 }}/><span className="flbl" style={{ margin:0,letterSpacing:0,textTransform:"none",fontSize:13,fontWeight:600 }}>Mark as Key Result</span></label></div>
+        </div>
+      </Modal>}
     </div>
   );
 };
@@ -4639,8 +4728,8 @@ function HRApp() {
                 <div className="tb-urole">{currentUser.role.split("/")[0].trim()}</div>
               </div>
             </div>
-            <button className="btn btn-sm" style={{ color:"var(--red)", borderColor:"rgba(200,49,42,0.2)", background:"var(--red-soft)" }} onClick={()=>{ localStorage.removeItem("doloxe_user"); setCurrentUser(null); }}>
-              <Icon n="logout" s={12}/>
+            <button className="btn btn-sm" style={{ color:"var(--red)", borderColor:"rgba(200,49,42,0.2)", background:"var(--red-soft)", gap:5, fontWeight:650 }} onClick={()=>{ localStorage.removeItem("doloxe_user"); setCurrentUser(null); }}>
+              <Icon n="logout" s={12}/><span>Sign Out</span>
             </button>
           </div>
         </div>
@@ -4671,10 +4760,6 @@ function HRApp() {
           ))}
 
           <div style={{ flex:1 }}/>
-          <div className="sb-divider"/>
-          <div className="sb-item" onClick={()=>{ localStorage.removeItem("doloxe_user"); setCurrentUser(null); }} style={{ color:"var(--red)", margin:"0 6px" }}>
-            <Icon n="logout" s={14}/><span>Sign Out</span>
-          </div>
         </div>
 
         {/* MAIN */}
