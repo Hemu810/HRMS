@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 
 // ─── GLOBAL STYLES ────────────────────────────────────────────────────────────
 // GS injects the design-system CSS once into the DOM as a <style> tag.
@@ -361,7 +362,6 @@ const GS = () => (
       width: 520px; max-width: 96vw; max-height: 88vh;
       display: flex; flex-direction: column;
       animation: moup 0.22s var(--ease);
-      will-change: transform, opacity;
     }
     .modal-w { width: 720px; }
     @keyframes moup { from { transform: translateY(22px) scale(0.95); opacity: 0 } to { transform: none; opacity: 1 } }
@@ -623,14 +623,15 @@ const Icon = ({ n, s = 15 }) => {
   );
 };
 
-const Modal = ({ title, onClose, children, footer, wide }) => (
+const Modal = ({ title, onClose, children, footer, wide }) => createPortal(
   <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
     <div className={`modal${wide ? " modal-w" : ""}`}>
       <div className="mh"><div className="mt">{title}</div><button className="mc" onClick={onClose}><Icon n="x" s={13}/></button></div>
       <div className="mb">{children}</div>
       {footer && <div className="mf">{footer}</div>}
     </div>
-  </div>
+  </div>,
+  document.body
 );
 
 // ─── EMPLOYEE DATA & ACCESS CONTROL ──────────────────────────────────────────
