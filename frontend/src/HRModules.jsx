@@ -4752,6 +4752,36 @@ function HRApp() {
     return () => document.removeEventListener("mousedown", handler);
   }, [notifOpen]);
 
+  // Global scroll-chain fix: when any inner scroll container reaches its
+  // boundary, forward the remaining delta to .main so the page keeps scrolling.
+  useEffect(() => {
+    const handleWheel = (e) => {
+      const main = document.querySelector('.main');
+      if (!main) return;
+      let el = e.target;
+      while (el && el !== main) {
+        const { overflowY, overflowX } = window.getComputedStyle(el);
+        const canScrollY = (overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 1;
+        const canScrollX = (overflowX === 'auto' || overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1;
+        if (canScrollY) {
+          const atTop    = el.scrollTop <= 0;
+          const atBottom = el.scrollTop >= el.scrollHeight - el.clientHeight - 1;
+          if ((e.deltaY < 0 && atTop) || (e.deltaY > 0 && atBottom)) {
+            main.scrollTop += e.deltaY;
+            e.preventDefault();
+          }
+          return;
+        }
+        // Horizontal-only container: let horizontal gestures go to it, but don't
+        // block vertical scroll — keep walking up the tree.
+        if (canScrollX && Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+        el = el.parentElement;
+      }
+    };
+    document.addEventListener('wheel', handleWheel, { passive: false });
+    return () => document.removeEventListener('wheel', handleWheel);
+  }, []);
+
   const unreadCount = notifs.filter(n => !n.is_read).length;
   const pendingTotal = pendingCounts.leaves + pendingCounts.corrections;
   const badgeCount = pendingTotal > 0 ? pendingTotal : unreadCount;
