@@ -3721,6 +3721,22 @@ const DirectoryMod = ({ currentUser }) => {
 // ─── ORG CHART ─────────────────────────────────────────────────────────────────
 const OrgMod = ({ currentUser }) => {
   const isFullView = canViewAll(currentUser);
+  const empScrollRef = useRef(null);
+  const fullScrollRef = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      const main = document.querySelector('.main');
+      if (!main) return;
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        main.scrollTop += e.deltaY;
+        e.preventDefault();
+      }
+    };
+    const els = [empScrollRef.current, fullScrollRef.current].filter(Boolean);
+    els.forEach(el => el.addEventListener('wheel', handler, { passive: false }));
+    return () => els.forEach(el => el.removeEventListener('wheel', handler));
+  }, [isFullView]);
 
   const renderOrgCard = (emp, extra) => {
     const isYou = emp.id === currentUser.id;
@@ -3792,7 +3808,7 @@ const OrgMod = ({ currentUser }) => {
             <div className="ct"><Icon n="org" s={14}/>My Reporting Chain</div>
             <div className="t3 tsm">{currentUser.dept} · {currentUser.role}</div>
           </div>
-          <div style={{ padding:"28px 20px", overflowX:"auto", overscrollBehavior:"none" }}>
+          <div ref={empScrollRef} style={{ padding:"28px 20px", overflowX:"auto", overscrollBehavior:"none" }}>
             <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:0 }}>
               {/* Manager chain above */}
               {mgrChain.map(mgr => (
@@ -3836,7 +3852,7 @@ const OrgMod = ({ currentUser }) => {
       {isFullView && (
         <div className="card">
           <div className="ch"><div className="ct"><Icon n="org" s={14}/>Full Org Tree</div></div>
-          <div style={{ padding:"24px 20px", overflowX:"auto", overscrollBehavior:"none" }}>
+          <div ref={fullScrollRef} style={{ padding:"24px 20px", overflowX:"auto", overscrollBehavior:"none" }}>
             {ceo && <div style={{ display:"flex", flexDirection:"column", alignItems:"center", marginBottom:24 }}>
               {renderOrgCard(ceo)}
               <div className="org-connector-v" style={{ height:28 }}/>
