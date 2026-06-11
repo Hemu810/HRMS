@@ -19,6 +19,7 @@ FastAPI automatically:
 
 from datetime import date
 from pathlib import Path
+from time import monotonic
 from uuid import uuid4
 
 from contextlib import asynccontextmanager
@@ -30,6 +31,24 @@ import uvicorn
 
 UPLOADS_DIR = Path(__file__).parent / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
+
+# Simple in-memory cache for the 4 bootstrap endpoints that fire on every page load.
+# Remote MSSQL adds ~100-300ms per query; caching reduces repeated hits to zero.
+_CACHE: dict = {}          # key → {"data": ..., "ts": monotonic()}
+_CACHE_TTL   = 30          # seconds before a cache entry expires
+
+def _cache_get(key):
+    entry = _CACHE.get(key)
+    if entry and (monotonic() - entry["ts"]) < _CACHE_TTL:
+        return entry["data"]
+    return None
+
+def _cache_set(key, data):
+    _CACHE[key] = {"data": data, "ts": monotonic()}
+
+def _cache_bust(*keys):
+    for k in keys:
+        _CACHE.pop(k, None)
 
 from config import settings
 from secrets import randbelow
@@ -47,8 +66,6 @@ from db import (
     invalidate_reset_token,
     change_employee_password,
     verify_current_password,
-    get_recovery_email,
-    update_recovery_email,
     # payroll
     fetch_payroll_runs,
     fetch_payroll_structure,
@@ -64,6 +81,8 @@ from db import (
     create_announcement,
     update_announcement,
     delete_announcement,
+    # performance reviews
+    fetch_reviews, create_review, update_review, delete_review,
     # email
     fetch_email_logs,
     insert_email_log,
@@ -76,6 +95,7 @@ from db import (
     fetch_corrections,
     create_correction,
     update_correction_status,
+    fetch_attendance_date_range,
     # leave
     fetch_leave_requests,
     create_leave_request,
@@ -156,7 +176,12 @@ def health():
 # boot by AppBootstrap and cached in the module-level ALL_USERS variable.
 @app.get("/api/employees/all")
 def all_employees():
-    return {"employees": fetch_all_employees_full()}
+    cached = _cache_get("employees_all")
+    if cached is not None:
+        return cached
+    data = {"employees": fetch_all_employees_full()}
+    _cache_set("employees_all", data)
+    return data
 
 
 # ── Auth endpoints ────────────────────────────────────────────────────────────
@@ -171,64 +196,49 @@ def login(payload: LoginRequest):
     return LoginResponse(ok=True, user=user)
 
 
-# ── Password reset endpoints ─────────────────────────────────────────────────
-# Forgot-password flow (3 steps):
-#   1. POST /api/auth/forgot-password  — find employee, generate OTP, send to real email
-#   2. POST /api/auth/reset-password   — verify OTP + set new password in one step
-# Change-password flow (logged-in user):
-#   3. POST /api/auth/change-password  — verify current password + set new password
-
 @app.post("/api/auth/forgot-password")
 def forgot_password(payload: dict):
     """
-    Step 1 of forgot-password — secure flow:
-      - Find the employee by their company email
-      - Look up their pre-registered recovery email (set when they were logged in)
-      - Send the OTP only to that recovery email — caller cannot override the destination
-    If no recovery email is on file, the employee must contact HR to reset.
-    Always returns the same shape even when the email is not found — prevents enumeration.
+    Step 1 of forgot-password: find employee by company email, generate OTP,
+    and send it to that same company email address stored in the DB.
+    Always returns the same shape to prevent account enumeration.
     """
-    account_email = (payload.get("accountEmail") or "").strip()
-
+    account_email = (payload.get("accountEmail") or "").strip().lower()
     if not account_email:
         raise HTTPException(status_code=400, detail="accountEmail is required.")
 
     emp = find_employee_by_email(account_email)
     if not emp or not emp.get("is_active"):
-        # Same response as "no recovery email" to avoid leaking account existence.
-        return {"ok": False, "noRecovery": True}
-
-    recovery = get_recovery_email(emp["employee_id"])
-    if not recovery:
-        return {"ok": False, "noRecovery": True}
+        return {"ok": True, "maskedEmail": account_email[0] + "***@" + account_email.split("@")[-1]}
 
     otp = str(randbelow(1000000)).zfill(6)
-    create_reset_token(emp["employee_id"], otp, recovery)
+    create_reset_token(emp["employee_id"], otp, account_email)
 
     try:
-        send_otp_email(recovery, otp, emp["full_name"])
+        send_otp_email(account_email, otp, emp["full_name"])
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Email send failed: {exc}") from exc
 
-    # Mask the recovery email for display: k*****@gmail.com
-    local, _, domain = recovery.partition("@")
+    local, _, domain = account_email.partition("@")
     masked = local[0] + "*" * max(1, len(local) - 2) + local[-1] + "@" + domain if len(local) > 2 else local[0] + "***@" + domain
     return {"ok": True, "maskedEmail": masked}
 
 
 @app.post("/api/auth/reset-password")
 def reset_password(payload: dict):
-    """
-    Step 2 of forgot-password: verify OTP (issued against the stored recovery email) + set new password.
-    """
-    account_email = (payload.get("accountEmail") or "").strip()
+    """Step 2: verify OTP and set the new password."""
+    account_email = (payload.get("accountEmail") or "").strip().lower()
     otp           = (payload.get("otp")          or "").strip()
     new_password  = (payload.get("newPassword")  or "").strip()
 
     if not account_email or not otp or not new_password:
         raise HTTPException(status_code=400, detail="accountEmail, otp and newPassword are required.")
-    if len(new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    if not any(c.isdigit() for c in new_password):
+        raise HTTPException(status_code=400, detail="Password must include at least one number.")
+    if not any(not c.isalnum() for c in new_password):
+        raise HTTPException(status_code=400, detail="Password must include at least one special character.")
 
     emp = find_employee_by_email(account_email)
     if not emp:
@@ -243,30 +253,6 @@ def reset_password(payload: dict):
     return {"ok": True, "message": "Password reset successfully. You can now log in."}
 
 
-@app.put("/api/auth/recovery-email")
-def set_recovery_email(payload: dict):
-    """
-    Lets a logged-in employee register or update their recovery email.
-    This endpoint is only called from inside the authenticated app — the
-    current password must be confirmed before the recovery email is saved,
-    preventing account takeover if a session is hijacked.
-    """
-    employee_id      = (payload.get("employeeId")      or "").strip().upper()
-    current_password = (payload.get("currentPassword") or "").strip()
-    recovery_email   = (payload.get("recoveryEmail")   or "").strip()
-
-    if not employee_id or not current_password or not recovery_email:
-        raise HTTPException(status_code=400, detail="employeeId, currentPassword and recoveryEmail are required.")
-    if not verify_current_password(employee_id, current_password):
-        raise HTTPException(status_code=401, detail="Current password is incorrect.")
-
-    update_recovery_email(employee_id, recovery_email)
-    # Mask for display
-    local, _, domain = recovery_email.partition("@")
-    masked = local[0] + "*" * max(1, len(local) - 2) + local[-1] + "@" + domain if len(local) > 2 else local[0] + "***@" + domain
-    return {"ok": True, "maskedEmail": masked}
-
-
 @app.post("/api/auth/change-password")
 def change_password_endpoint(payload: dict):
     """
@@ -279,8 +265,12 @@ def change_password_endpoint(payload: dict):
 
     if not employee_id or not current_password or not new_password:
         raise HTTPException(status_code=400, detail="employeeId, currentPassword and newPassword are required.")
-    if len(new_password) < 6:
-        raise HTTPException(status_code=400, detail="New password must be at least 6 characters.")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    if not any(c.isdigit() for c in new_password):
+        raise HTTPException(status_code=400, detail="Password must include at least one number.")
+    if not any(not c.isalnum() for c in new_password):
+        raise HTTPException(status_code=400, detail="Password must include at least one special character.")
     if not verify_current_password(employee_id, current_password):
         raise HTTPException(status_code=401, detail="Current password is incorrect.")
 
@@ -362,7 +352,12 @@ def del_announcement(ann_id: int):
 
 @app.get("/api/payroll/structure")
 def get_payroll_structure():
-    return {"structure": fetch_payroll_structure()}
+    cached = _cache_get("payroll_structure")
+    if cached is not None:
+        return cached
+    data = {"structure": fetch_payroll_structure()}
+    _cache_set("payroll_structure", data)
+    return data
 
 
 @app.put("/api/payroll/structure/{component_key}")
@@ -376,6 +371,7 @@ def put_payroll_structure(component_key: str, payload: dict):
         )
         if not row:
             raise HTTPException(status_code=404, detail="Component not found.")
+        _cache_bust("payroll_structure")
         return {"ok": True, "component": row}
     except HTTPException:
         raise
@@ -390,7 +386,12 @@ def put_payroll_structure(component_key: str, payload: dict):
 
 @app.get("/api/payroll/field-configs")
 def get_field_configs():
-    return {"fieldConfigs": fetch_payroll_field_configs()}
+    cached = _cache_get("payroll_field_configs")
+    if cached is not None:
+        return cached
+    data = {"fieldConfigs": fetch_payroll_field_configs()}
+    _cache_set("payroll_field_configs", data)
+    return data
 
 
 @app.post("/api/payroll/field-configs")
@@ -405,6 +406,7 @@ def post_field_config(payload: dict):
             active=bool(payload.get("active", True)),
             created_by=payload.get("createdBy"),
         )
+        _cache_bust("payroll_field_configs")
         return {"ok": True, "field": field}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -422,16 +424,16 @@ def put_field_config(field_id: int, payload: dict):
     field = update_payroll_field_config(field_id, **updates)
     if not field:
         raise HTTPException(status_code=404, detail="Field config not found.")
+    _cache_bust("payroll_field_configs")
     return {"ok": True, "field": field}
 
 
 @app.delete("/api/payroll/field-configs/{field_id}")
 def del_field_config(field_id: int):
-    # Hard delete — custom fields are admin-owned config, not employee data,
-    # so a real delete is safe here.
     deleted = delete_payroll_field_config(field_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Field config not found.")
+    _cache_bust("payroll_field_configs")
     return {"ok": True}
 
 
@@ -441,8 +443,12 @@ def del_field_config(field_id: int):
 
 @app.get("/api/payroll/statutory-config")
 def get_statutory_config():
-    """Returns all statutory config rows (PF/ESI/PT/TDS rates and slabs)."""
-    return {"statutoryConfig": fetch_statutory_config()}
+    cached = _cache_get("statutory_config")
+    if cached is not None:
+        return cached
+    data = {"statutoryConfig": fetch_statutory_config()}
+    _cache_set("statutory_config", data)
+    return data
 
 
 @app.put("/api/payroll/statutory-config/{config_key}")
@@ -459,6 +465,7 @@ def put_statutory_config(config_key: str, payload: dict):
     ok = update_statutory_config(config_key, value, updated_by)
     if not ok:
         raise HTTPException(status_code=404, detail="Config key not found.")
+    _cache_bust("statutory_config")
     return {"ok": True}
 
 
@@ -524,26 +531,15 @@ def send_payslip(payload: PayslipEmailRequest):
         raise HTTPException(status_code=502, detail=f"Email send failed: {exc}") from exc
 
 
-# ── HR: manage recovery emails for employees ─────────────────────────────────
-
-@app.put("/api/hr/recovery-email/{employee_id}")
-def hr_set_recovery_email(employee_id: str, payload: dict):
-    """
-    HR-only: set or update the recovery email for any employee.
-    Used during onboarding or when an employee hasn't set one themselves.
-    """
-    recovery_email = (payload.get("recoveryEmail") or "").strip()
-    if not recovery_email:
-        raise HTTPException(status_code=400, detail="recoveryEmail is required.")
-    ok = update_recovery_email(employee_id.upper(), recovery_email)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Employee not found.")
-    return {"ok": True}
-
-
 # ── Attendance endpoints ──────────────────────────────────────────────────────
 # IMPORTANT: specific routes (corrections, clock-in, all/month) must be declared
 # BEFORE the wildcard /{employee_id} route — FastAPI matches in definition order.
+
+@app.get("/api/attendance/date-range")
+def get_attendance_date_range():
+    """Returns the earliest and latest date for which attendance has been recorded."""
+    return fetch_attendance_date_range()
+
 
 @app.get("/api/attendance/all/month")
 def get_all_attendance(year: int = Query(...), month: int = Query(...)):
@@ -1013,6 +1009,50 @@ def del_goal(goal_id: int):
         return {"ok": True}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ── Performance Reviews endpoints ─────────────────────────────────────────────
+
+@app.get("/api/perf/reviews/{employee_id}")
+def get_reviews(employee_id: str):
+    return {"reviews": fetch_reviews(employee_id)}
+
+
+@app.post("/api/perf/reviews")
+def post_review(payload: dict):
+    try:
+        review = create_review(
+            employee_id=payload["employeeId"],
+            reviewer_id=payload.get("reviewerId"),
+            period=payload["period"],
+            score=payload.get("score"),
+            feedback=payload.get("feedback", ""),
+            status=payload.get("status", "pending"),
+            review_date=payload.get("reviewDate"),
+        )
+        return {"ok": True, "review": review}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/perf/reviews/{review_id}")
+def put_review(review_id: int, payload: dict):
+    updates = {}
+    if "score"      in payload: updates["score"]       = float(payload["score"]) if payload["score"] is not None else None
+    if "feedback"   in payload: updates["feedback"]    = payload["feedback"]
+    if "status"     in payload: updates["status"]      = payload["status"]
+    if "reviewDate" in payload: updates["review_date"] = payload["reviewDate"]
+    if "period"     in payload: updates["period"]      = payload["period"]
+    review = update_review(review_id, **updates)
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found.")
+    return {"ok": True, "review": review}
+
+
+@app.delete("/api/perf/reviews/{review_id}")
+def del_review(review_id: int):
+    delete_review(review_id)
+    return {"ok": True}
 
 
 # ── Dev server entry point ────────────────────────────────────────────────────

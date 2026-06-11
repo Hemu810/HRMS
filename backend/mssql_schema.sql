@@ -12,9 +12,9 @@ USE DOLOXEHRMS;
 GO
 
 -- ── 1. employees ─────────────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.employees', 'U') IS NULL
+IF OBJECT_ID('hrms.employees', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.employees (
+  CREATE TABLE hrms.employees (
     id               BIGINT IDENTITY(1,1) PRIMARY KEY,
     employee_id      NVARCHAR(20)   NOT NULL UNIQUE,
     first_name       NVARCHAR(80)   NOT NULL,
@@ -30,7 +30,7 @@ BEGIN
     dob              DATE           NULL,
     gender           NVARCHAR(20)   NULL,
     color            NVARCHAR(10)   NULL,
-    mgr_id           NVARCHAR(20)   NULL REFERENCES dbo.employees(employee_id),
+    mgr_id           NVARCHAR(20)   NULL REFERENCES hrms.employees(employee_id),
     pan              NVARCHAR(20)   NULL,
     aadhaar          NVARCHAR(30)   NULL,
     uan              NVARCHAR(30)   NULL,
@@ -45,10 +45,10 @@ BEGIN
     access_level     INT            NOT NULL DEFAULT 1,
     is_hr            BIT            NOT NULL DEFAULT 0,
     is_finance_operator BIT         NOT NULL DEFAULT 0,
-    perf_score       DECIMAL(4,2)   NULL,
-    password_hash    NVARCHAR(200)  NOT NULL,
-    recovery_email   NVARCHAR(200)  NULL,
-    is_active        BIT            NOT NULL DEFAULT 1,
+    perf_score            DECIMAL(4,2)   NULL,
+    password_hash         NVARCHAR(200)  NOT NULL,
+    must_change_password  BIT            NOT NULL DEFAULT 1,
+    is_active             BIT            NOT NULL DEFAULT 1,
     created_at       DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at       DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
   );
@@ -56,9 +56,9 @@ END
 GO
 
 -- ── 2. payroll_runs ──────────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.payroll_runs', 'U') IS NULL
+IF OBJECT_ID('hrms.payroll_runs', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.payroll_runs (
+  CREATE TABLE hrms.payroll_runs (
     id              BIGINT IDENTITY(1,1) PRIMARY KEY,
     payroll_month   DATE          NOT NULL UNIQUE,
     status          NVARCHAR(30)  NOT NULL DEFAULT 'draft',
@@ -66,7 +66,7 @@ BEGIN
     payment_mode    NVARCHAR(40)  NOT NULL DEFAULT 'Bank Transfer',
     tax_regime      NVARCHAR(40)  NOT NULL DEFAULT 'New Regime',
     remarks         NVARCHAR(MAX) NULL,
-    processed_by    NVARCHAR(20)  NULL REFERENCES dbo.employees(employee_id),
+    processed_by    NVARCHAR(20)  NULL REFERENCES hrms.employees(employee_id),
     processed_at    DATETIME2     NULL,
     created_at      DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at      DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME()
@@ -75,12 +75,12 @@ END
 GO
 
 -- ── 3. payslips ──────────────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.payslips', 'U') IS NULL
+IF OBJECT_ID('hrms.payslips', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.payslips (
+  CREATE TABLE hrms.payslips (
     id               BIGINT IDENTITY(1,1) PRIMARY KEY,
-    payroll_run_id   BIGINT         NOT NULL REFERENCES dbo.payroll_runs(id),
-    employee_id      NVARCHAR(20)   NOT NULL REFERENCES dbo.employees(employee_id),
+    payroll_run_id   BIGINT         NOT NULL REFERENCES hrms.payroll_runs(id),
+    employee_id      NVARCHAR(20)   NOT NULL REFERENCES hrms.employees(employee_id),
     total_work_days  DECIMAL(5,2)   NOT NULL DEFAULT 0,
     payable_days     DECIMAL(5,2)   NOT NULL DEFAULT 0,
     lop_days         DECIMAL(5,2)   NOT NULL DEFAULT 0,
@@ -96,20 +96,20 @@ END
 GO
 
 -- ── 4. payroll_structure ─────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.payroll_structure', 'U') IS NULL
+IF OBJECT_ID('hrms.payroll_structure', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.payroll_structure (
+  CREATE TABLE hrms.payroll_structure (
     id            BIGINT IDENTITY(1,1) PRIMARY KEY,
     component_key NVARCHAR(40)   NOT NULL UNIQUE,
     label         NVARCHAR(120)  NOT NULL,
     calc_type     NVARCHAR(30)   NOT NULL,
     value         DECIMAL(12,2)  NOT NULL DEFAULT 0,
     description   NVARCHAR(300)  NULL,
-    updated_by    NVARCHAR(20)   NULL REFERENCES dbo.employees(employee_id),
+    updated_by    NVARCHAR(20)   NULL REFERENCES hrms.employees(employee_id),
     updated_at    DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
   );
 
-  INSERT INTO dbo.payroll_structure (component_key, label, calc_type, value, description, updated_at) VALUES
+  INSERT INTO hrms.payroll_structure (component_key, label, calc_type, value, description, updated_at) VALUES
     ('basic_pct', 'Basic Salary',               'pct_ctc',   50.0, 'Percentage of monthly CTC paid as Basic Salary',                          SYSUTCDATETIME()),
     ('hra_pct',   'House Rent Allowance (HRA)',  'pct_basic', 45.0, 'Percentage of Basic Salary paid as HRA',                                  SYSUTCDATETIME()),
     ('lta_pct',   'Leave Travel Allowance (LTA)','pct_ctc',    0.0, 'Percentage of monthly CTC paid as LTA (set to 0 if not applicable)',      SYSUTCDATETIME()),
@@ -118,15 +118,15 @@ END
 GO
 
 -- ── 5. announcements ─────────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.announcements', 'U') IS NULL
+IF OBJECT_ID('hrms.announcements', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.announcements (
+  CREATE TABLE hrms.announcements (
     id           BIGINT IDENTITY(1,1) PRIMARY KEY,
     title        NVARCHAR(300)  NOT NULL,
     body         NVARCHAR(MAX)  NOT NULL,
     category     NVARCHAR(50)   NOT NULL DEFAULT 'Company',
     is_important BIT            NOT NULL DEFAULT 0,
-    author_id    NVARCHAR(20)   NULL REFERENCES dbo.employees(employee_id),
+    author_id    NVARCHAR(20)   NULL REFERENCES hrms.employees(employee_id),
     author_name  NVARCHAR(180)  NULL,
     is_active    BIT            NOT NULL DEFAULT 1,
     created_at   DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
@@ -136,16 +136,16 @@ END
 GO
 
 -- ── 6. payroll_field_config ──────────────────────────────────────────────────
-IF OBJECT_ID('dbo.payroll_field_config', 'U') IS NULL
+IF OBJECT_ID('hrms.payroll_field_config', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.payroll_field_config (
+  CREATE TABLE hrms.payroll_field_config (
     id         BIGINT IDENTITY(1,1) PRIMARY KEY,
     name       NVARCHAR(120)  NOT NULL,
     category   NVARCHAR(20)   NOT NULL,
     calc_type  NVARCHAR(30)   NOT NULL,
     value      DECIMAL(12,2)  NOT NULL DEFAULT 0,
     active     BIT            NOT NULL DEFAULT 1,
-    created_by NVARCHAR(20)   NULL REFERENCES dbo.employees(employee_id),
+    created_by NVARCHAR(20)   NULL REFERENCES hrms.employees(employee_id),
     created_at DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
     updated_at DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
   );
@@ -153,16 +153,16 @@ END
 GO
 
 -- ── 7. payslip_line_items ────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.payslip_line_items', 'U') IS NULL
+IF OBJECT_ID('hrms.payslip_line_items', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.payslip_line_items (
+  CREATE TABLE hrms.payslip_line_items (
     id               BIGINT IDENTITY(1,1) PRIMARY KEY,
-    employee_id      NVARCHAR(20)   NOT NULL REFERENCES dbo.employees(employee_id),
+    employee_id      NVARCHAR(20)   NOT NULL REFERENCES hrms.employees(employee_id),
     payroll_month    NVARCHAR(30)   NOT NULL,
     line_type        NVARCHAR(20)   NOT NULL,
     label            NVARCHAR(120)  NOT NULL,
     amount           DECIMAL(14,2)  NOT NULL DEFAULT 0,
-    field_config_id  BIGINT         NULL REFERENCES dbo.payroll_field_config(id),
+    field_config_id  BIGINT         NULL REFERENCES hrms.payroll_field_config(id),
     is_custom        BIT            NOT NULL DEFAULT 0,
     created_at       DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
   );
@@ -170,9 +170,9 @@ END
 GO
 
 -- ── 8. email_logs ────────────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.email_logs', 'U') IS NULL
+IF OBJECT_ID('hrms.email_logs', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.email_logs (
+  CREATE TABLE hrms.email_logs (
     id                    BIGINT IDENTITY(1,1) PRIMARY KEY,
     payslip_id            BIGINT         NULL,
     recipient_email       NVARCHAR(180)  NOT NULL,
@@ -190,11 +190,11 @@ END
 GO
 
 -- ── 9. password_reset_tokens ─────────────────────────────────────────────────
-IF OBJECT_ID('dbo.password_reset_tokens', 'U') IS NULL
+IF OBJECT_ID('hrms.password_reset_tokens', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.password_reset_tokens (
+  CREATE TABLE hrms.password_reset_tokens (
     id          BIGINT IDENTITY(1,1) PRIMARY KEY,
-    employee_id NVARCHAR(20)  NOT NULL REFERENCES dbo.employees(employee_id),
+    employee_id NVARCHAR(20)  NOT NULL REFERENCES hrms.employees(employee_id),
     otp         NVARCHAR(10)  NOT NULL,
     real_email  NVARCHAR(200) NOT NULL,
     expires_at  DATETIME2     NOT NULL,
@@ -205,11 +205,11 @@ END
 GO
 
 -- ── 10. attendance ───────────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.attendance', 'U') IS NULL
+IF OBJECT_ID('hrms.attendance', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.attendance (
+  CREATE TABLE hrms.attendance (
     id           BIGINT IDENTITY(1,1) PRIMARY KEY,
-    employee_id  NVARCHAR(20)  NOT NULL REFERENCES dbo.employees(employee_id),
+    employee_id  NVARCHAR(20)  NOT NULL REFERENCES hrms.employees(employee_id),
     date         DATE          NOT NULL,
     status       NVARCHAR(20)  NOT NULL DEFAULT 'present',
     clock_in     NVARCHAR(10)  NULL,
@@ -224,11 +224,11 @@ END
 GO
 
 -- ── 11. attendance_corrections ───────────────────────────────────────────────
-IF OBJECT_ID('dbo.attendance_corrections', 'U') IS NULL
+IF OBJECT_ID('hrms.attendance_corrections', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.attendance_corrections (
+  CREATE TABLE hrms.attendance_corrections (
     id           BIGINT IDENTITY(1,1) PRIMARY KEY,
-    employee_id  NVARCHAR(20)  NOT NULL REFERENCES dbo.employees(employee_id),
+    employee_id  NVARCHAR(20)  NOT NULL REFERENCES hrms.employees(employee_id),
     emp_name     NVARCHAR(180) NOT NULL,
     date         DATE          NOT NULL,
     reason       NVARCHAR(MAX) NOT NULL,
@@ -243,11 +243,11 @@ END
 GO
 
 -- ── 12. leave_requests ───────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.leave_requests', 'U') IS NULL
+IF OBJECT_ID('hrms.leave_requests', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.leave_requests (
+  CREATE TABLE hrms.leave_requests (
     id           BIGINT IDENTITY(1,1) PRIMARY KEY,
-    employee_id  NVARCHAR(20)  NOT NULL REFERENCES dbo.employees(employee_id),
+    employee_id  NVARCHAR(20)  NOT NULL REFERENCES hrms.employees(employee_id),
     emp_name     NVARCHAR(180) NOT NULL,
     leave_type   NVARCHAR(60)  NOT NULL,
     from_date    DATE          NOT NULL,
@@ -264,11 +264,11 @@ END
 GO
 
 -- ── 13. leave_balances ───────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.leave_balances', 'U') IS NULL
+IF OBJECT_ID('hrms.leave_balances', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.leave_balances (
+  CREATE TABLE hrms.leave_balances (
     id          BIGINT IDENTITY(1,1) PRIMARY KEY,
-    employee_id NVARCHAR(20) NOT NULL REFERENCES dbo.employees(employee_id),
+    employee_id NVARCHAR(20) NOT NULL REFERENCES hrms.employees(employee_id),
     leave_type  NVARCHAR(60) NOT NULL,
     total       INT          NOT NULL DEFAULT 0,
     used        INT          NOT NULL DEFAULT 0,
@@ -282,11 +282,11 @@ END
 GO
 
 -- ── 14. time_log_entries ─────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.time_log_entries', 'U') IS NULL
+IF OBJECT_ID('hrms.time_log_entries', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.time_log_entries (
+  CREATE TABLE hrms.time_log_entries (
     id          BIGINT IDENTITY(1,1) PRIMARY KEY,
-    employee_id NVARCHAR(20)   NOT NULL REFERENCES dbo.employees(employee_id),
+    employee_id NVARCHAR(20)   NOT NULL REFERENCES hrms.employees(employee_id),
     week_key    DATE           NOT NULL,
     date        DATE           NOT NULL,
     project     NVARCHAR(200)  NOT NULL,
@@ -299,11 +299,11 @@ END
 GO
 
 -- ── 15. timesheets ───────────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.timesheets', 'U') IS NULL
+IF OBJECT_ID('hrms.timesheets', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.timesheets (
+  CREATE TABLE hrms.timesheets (
     id          BIGINT IDENTITY(1,1) PRIMARY KEY,
-    employee_id NVARCHAR(20)  NOT NULL REFERENCES dbo.employees(employee_id),
+    employee_id NVARCHAR(20)  NOT NULL REFERENCES hrms.employees(employee_id),
     week_key    DATE          NOT NULL,
     total_hours DECIMAL(6,2)  NOT NULL DEFAULT 0,
     status      NVARCHAR(20)  NOT NULL DEFAULT 'draft',
@@ -316,12 +316,12 @@ END
 GO
 
 -- ── 16. documents ────────────────────────────────────────────────────────────
-IF OBJECT_ID('dbo.documents', 'U') IS NULL
+IF OBJECT_ID('hrms.documents', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.documents (
+  CREATE TABLE hrms.documents (
     id            BIGINT IDENTITY(1,1) PRIMARY KEY,
-    employee_id   NVARCHAR(20)  NOT NULL REFERENCES dbo.employees(employee_id),
-    uploaded_by   NVARCHAR(20)  NOT NULL REFERENCES dbo.employees(employee_id),
+    employee_id   NVARCHAR(20)  NOT NULL REFERENCES hrms.employees(employee_id),
+    uploaded_by   NVARCHAR(20)  NOT NULL REFERENCES hrms.employees(employee_id),
     original_name NVARCHAR(255) NOT NULL,
     stored_name   NVARCHAR(255) NOT NULL,
     file_type     NVARCHAR(80)  NULL,
@@ -334,19 +334,19 @@ END
 GO
 
 -- ── 17. payroll_statutory_config ─────────────────────────────────────────────
-IF OBJECT_ID('dbo.payroll_statutory_config', 'U') IS NULL
+IF OBJECT_ID('hrms.payroll_statutory_config', 'U') IS NULL
 BEGIN
-  CREATE TABLE dbo.payroll_statutory_config (
+  CREATE TABLE hrms.payroll_statutory_config (
     id          BIGINT IDENTITY(1,1) PRIMARY KEY,
     config_key  NVARCHAR(60)   NOT NULL UNIQUE,
     label       NVARCHAR(200)  NOT NULL,
     value       NVARCHAR(500)  NOT NULL,
     description NVARCHAR(500)  NULL,
-    updated_by  NVARCHAR(20)   NULL REFERENCES dbo.employees(employee_id),
+    updated_by  NVARCHAR(20)   NULL REFERENCES hrms.employees(employee_id),
     updated_at  DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
   );
 
-  INSERT INTO dbo.payroll_statutory_config (config_key, label, value, description, updated_at) VALUES
+  INSERT INTO hrms.payroll_statutory_config (config_key, label, value, description, updated_at) VALUES
     ('pf_rate_employee',       'PF Employee Rate',                  '0.12',
      'Employee PF contribution: 12% of basic salary (capped at PF ceiling)',                          SYSUTCDATETIME()),
     ('pf_rate_employer',       'PF Employer Rate',                  '0.12',
@@ -376,20 +376,126 @@ GO
 
 -- ── Indexes ──────────────────────────────────────────────────────────────────
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_payslips_employee_id')
-  CREATE INDEX IX_payslips_employee_id ON dbo.payslips(employee_id);
+  CREATE INDEX IX_payslips_employee_id ON hrms.payslips(employee_id);
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_payslip_line_items_emp_month')
-  CREATE INDEX IX_payslip_line_items_emp_month ON dbo.payslip_line_items(employee_id, payroll_month);
+  CREATE INDEX IX_payslip_line_items_emp_month ON hrms.payslip_line_items(employee_id, payroll_month);
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_attendance_emp_date')
-  CREATE INDEX IX_attendance_emp_date ON dbo.attendance(employee_id, date);
+  CREATE INDEX IX_attendance_emp_date ON hrms.attendance(employee_id, date);
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_leave_requests_emp')
-  CREATE INDEX IX_leave_requests_emp ON dbo.leave_requests(employee_id);
+  CREATE INDEX IX_leave_requests_emp ON hrms.leave_requests(employee_id);
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_time_log_entries_emp_week')
-  CREATE INDEX IX_time_log_entries_emp_week ON dbo.time_log_entries(employee_id, week_key);
+  CREATE INDEX IX_time_log_entries_emp_week ON hrms.time_log_entries(employee_id, week_key);
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_email_logs_status')
-  CREATE INDEX IX_email_logs_status ON dbo.email_logs(status);
+  CREATE INDEX IX_email_logs_status ON hrms.email_logs(status);
+GO
+
+-- ============================================================
+-- TABLES ADDED DURING DEVELOPMENT (run these if missing)
+-- Schema: hrms  (matches MetaData(schema="hrms") in db.py)
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'hrms')
+  EXEC('CREATE SCHEMA hrms');
+GO
+
+-- ── 18. notifications ────────────────────────────────────────────────────────
+IF OBJECT_ID('hrms.notifications', 'U') IS NULL
+BEGIN
+  CREATE TABLE hrms.notifications (
+    id           BIGINT IDENTITY(1,1) PRIMARY KEY,
+    recipient_id NVARCHAR(20)  NOT NULL,
+    type         NVARCHAR(40)  NOT NULL,
+    title        NVARCHAR(200) NOT NULL,
+    message      NVARCHAR(500) NOT NULL,
+    ref_id       INT           NULL,
+    is_read      BIT           NOT NULL DEFAULT 0,
+    created_at   DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+END
+GO
+
+-- ── 19. goals ────────────────────────────────────────────────────────────────
+IF OBJECT_ID('hrms.goals', 'U') IS NULL
+BEGIN
+  CREATE TABLE hrms.goals (
+    id          BIGINT IDENTITY(1,1) PRIMARY KEY,
+    employee_id NVARCHAR(20)  NOT NULL,
+    title       NVARCHAR(200) NOT NULL,
+    target      NVARCHAR(300) NULL,
+    notes       NVARCHAR(500) NULL,
+    is_key      BIT           NOT NULL DEFAULT 0,
+    progress    INT           NOT NULL DEFAULT 0,
+    status      NVARCHAR(20)  NOT NULL DEFAULT 'on-track',
+    quarter     NVARCHAR(10)  NOT NULL,
+    created_at  DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
+    updated_at  DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+END
+GO
+
+-- ── 20. performance_reviews ──────────────────────────────────────────────────
+IF OBJECT_ID('hrms.performance_reviews', 'U') IS NULL
+BEGIN
+  CREATE TABLE hrms.performance_reviews (
+    id          BIGINT IDENTITY(1,1) PRIMARY KEY,
+    employee_id NVARCHAR(20)  NOT NULL,
+    reviewer_id NVARCHAR(20)  NULL,
+    period      NVARCHAR(40)  NOT NULL,
+    score       FLOAT         NULL,
+    feedback    NVARCHAR(MAX) NULL,
+    status      NVARCHAR(20)  NOT NULL DEFAULT 'pending',
+    review_date DATE          NULL,
+    created_at  DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+END
+GO
+
+-- ── 21. employee_skills ──────────────────────────────────────────────────────
+-- Defined in schema but no longer used by the app (Skills tab was removed).
+-- Create it anyway to keep the schema in sync with db.py.
+IF OBJECT_ID('hrms.employee_skills', 'U') IS NULL
+BEGIN
+  CREATE TABLE hrms.employee_skills (
+    id          BIGINT IDENTITY(1,1) PRIMARY KEY,
+    employee_id NVARCHAR(20)  NOT NULL,
+    skill_name  NVARCHAR(100) NOT NULL,
+    score       FLOAT         NOT NULL,
+    updated_by  NVARCHAR(20)  NULL,
+    updated_at  DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME()
+  );
+END
+GO
+
+-- ── Indexes for new tables ───────────────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_notifications_recipient')
+  CREATE INDEX IX_notifications_recipient ON hrms.notifications(recipient_id);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_goals_employee_quarter')
+  CREATE INDEX IX_goals_employee_quarter ON hrms.goals(employee_id, quarter);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_perf_reviews_employee')
+  CREATE INDEX IX_perf_reviews_employee ON hrms.performance_reviews(employee_id);
+GO
+
+-- ============================================================
+-- MIGRATION — run this if your employees table already exists
+-- (created from an older version of this file).
+-- Adds the must_change_password column that the app requires.
+-- Safe to re-run — the IF NOT EXISTS guard prevents duplicates.
+-- ============================================================
+IF NOT EXISTS (
+  SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = 'hrms' AND TABLE_NAME = 'employees'
+    AND COLUMN_NAME = 'must_change_password'
+)
+BEGIN
+  ALTER TABLE hrms.employees
+    ADD must_change_password BIT NOT NULL DEFAULT 1;
+  PRINT 'Column must_change_password added to hrms.employees';
+END
 GO

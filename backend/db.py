@@ -32,6 +32,7 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     MetaData,
@@ -42,6 +43,7 @@ from sqlalchemy import (
     create_engine,
     delete as sql_delete,
     desc,
+    func,
     insert,
     select,
     text,
@@ -109,7 +111,7 @@ engine = create_engine(
 
 # MetaData holds all table definitions in memory so create_all() can create
 # or verify them in one pass.
-metadata = MetaData()
+metadata = MetaData(schema="hrms")
 
 # ── Table definitions ─────────────────────────────────────────────────────────
 
@@ -134,7 +136,7 @@ employees_table = Table(
     Column("dob",            Date),
     Column("gender",         String(20)),
     Column("color",          String(10)),   # hex colour for the avatar background in the UI
-    Column("mgr_id",         String(20),  ForeignKey("employees.employee_id", use_alter=True, name="fk_mgr"), nullable=True),
+    Column("mgr_id",         String(20),  ForeignKey("hrms.employees.employee_id", use_alter=True, name="fk_mgr"), nullable=True),
     Column("pan",            String(20)),
     Column("aadhaar",        String(30)),
     Column("uan",            String(30)),   # Universal Account Number for PF
@@ -151,7 +153,7 @@ employees_table = Table(
     Column("is_finance_operator", Boolean, nullable=False, default=False),
     Column("perf_score",     Numeric(4, 2)),   # 0.0 – 5.0 performance rating
     Column("password_hash",  String(200), nullable=False),
-    Column("recovery_email", String(200), nullable=True),  # real email set by employee for OTP delivery
+    Column("must_change_password", Boolean, nullable=False, default=True),  # forced on first login
     Column("is_active",      Boolean, nullable=False, default=True),
     Column("created_at",     DateTime, nullable=False, default=datetime.utcnow),
     Column("updated_at",     DateTime, nullable=False, default=datetime.utcnow),
@@ -169,7 +171,7 @@ payroll_runs_table = Table(
     Column("payment_mode", String(40), nullable=False, default="Bank Transfer"),
     Column("tax_regime",   String(40), nullable=False, default="New Regime"),
     Column("remarks", Text),
-    Column("processed_by", String(20), ForeignKey("employees.employee_id")),
+    Column("processed_by", String(20), ForeignKey("hrms.employees.employee_id")),
     Column("processed_at", DateTime),
     Column("created_at",   DateTime, nullable=False, default=datetime.utcnow),
     Column("updated_at",   DateTime, nullable=False, default=datetime.utcnow),
@@ -181,8 +183,8 @@ payslips_table = Table(
     "payslips",
     metadata,
     Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("payroll_run_id",  BigInteger, ForeignKey("payroll_runs.id"), nullable=False),
-    Column("employee_id",     String(20), ForeignKey("employees.employee_id"), nullable=False),
+    Column("payroll_run_id",  BigInteger, ForeignKey("hrms.payroll_runs.id"), nullable=False),
+    Column("employee_id",     String(20), ForeignKey("hrms.employees.employee_id"), nullable=False),
     Column("total_work_days", Numeric(5, 2), nullable=False, default=0),
     Column("payable_days",    Numeric(5, 2), nullable=False, default=0),
     Column("lop_days",        Numeric(5, 2), nullable=False, default=0),   # Loss Of Pay days
@@ -206,7 +208,7 @@ payroll_structure_table = Table(
     Column("calc_type",   String(30),   nullable=False),   # pct_ctc | pct_basic | fixed
     Column("value",       Numeric(12,2),nullable=False, default=0),
     Column("description", String(300),  nullable=True),
-    Column("updated_by",  String(20),   ForeignKey("employees.employee_id"), nullable=True),
+    Column("updated_by",  String(20),   ForeignKey("hrms.employees.employee_id"), nullable=True),
     Column("updated_at",  DateTime,     nullable=False, default=datetime.utcnow),
 )
 
@@ -230,7 +232,7 @@ announcements_table = Table(
     Column("body",        Text,         nullable=False),
     Column("category",    String(50),   nullable=False, default="Company"),
     Column("is_important", Boolean,     nullable=False, default=False),
-    Column("author_id",   String(20),   ForeignKey("employees.employee_id"), nullable=True),
+    Column("author_id",   String(20),   ForeignKey("hrms.employees.employee_id"), nullable=True),
     Column("author_name", String(180),  nullable=True),
     Column("is_active",   Boolean,      nullable=False, default=True),
     Column("created_at",  DateTime,     nullable=False, default=datetime.utcnow),
@@ -249,7 +251,7 @@ payroll_field_config_table = Table(
     Column("calc_type",  String(30),   nullable=False),
     Column("value",      Numeric(12,2),nullable=False, default=0),
     Column("active",     Boolean,      nullable=False, default=True),
-    Column("created_by", String(20),   ForeignKey("employees.employee_id"), nullable=True),
+    Column("created_by", String(20),   ForeignKey("hrms.employees.employee_id"), nullable=True),
     Column("created_at", DateTime,     nullable=False, default=datetime.utcnow),
     Column("updated_at", DateTime,     nullable=False, default=datetime.utcnow),
 )
@@ -261,12 +263,12 @@ payslip_line_items_table = Table(
     "payslip_line_items",
     metadata,
     Column("id",              BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("employee_id",     String(20),   ForeignKey("employees.employee_id"), nullable=False),
+    Column("employee_id",     String(20),   ForeignKey("hrms.employees.employee_id"), nullable=False),
     Column("payroll_month",   String(30),   nullable=False),   # e.g. "June 2026"
     Column("line_type",       String(20),   nullable=False),   # earning | deduction
     Column("label",           String(120),  nullable=False),
     Column("amount",          Numeric(14,2),nullable=False, default=0),
-    Column("field_config_id", BigInteger,   ForeignKey("payroll_field_config.id"), nullable=True),
+    Column("field_config_id", BigInteger,   ForeignKey("hrms.payroll_field_config.id"), nullable=True),
     Column("is_custom",       Boolean,      nullable=False, default=False),
     Column("created_at",      DateTime,     nullable=False, default=datetime.utcnow),
 )
@@ -299,7 +301,7 @@ password_reset_tokens_table = Table(
     "password_reset_tokens",
     metadata,
     Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("employee_id", String(20), ForeignKey("employees.employee_id"), nullable=False),
+    Column("employee_id", String(20), ForeignKey("hrms.employees.employee_id"), nullable=False),
     Column("otp", String(10), nullable=False),
     Column("real_email", String(200), nullable=False),  # real email provided by the user (not the DB email)
     Column("expires_at", DateTime, nullable=False),
@@ -313,7 +315,7 @@ attendance_table = Table(
     "attendance",
     metadata,
     Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("employee_id", String(20), ForeignKey("employees.employee_id"), nullable=False),
+    Column("employee_id", String(20), ForeignKey("hrms.employees.employee_id"), nullable=False),
     Column("date", Date, nullable=False),
     Column("status", String(20), nullable=False, default="present"),  # present|late|absent|leave|holiday|weekend
     Column("clock_in", String(10)),
@@ -329,7 +331,7 @@ attendance_corrections_table = Table(
     "attendance_corrections",
     metadata,
     Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("employee_id", String(20), ForeignKey("employees.employee_id"), nullable=False),
+    Column("employee_id", String(20), ForeignKey("hrms.employees.employee_id"), nullable=False),
     Column("emp_name", String(180), nullable=False),
     Column("date", Date, nullable=False),
     Column("reason", Text, nullable=False),
@@ -346,7 +348,7 @@ leave_requests_table = Table(
     "leave_requests",
     metadata,
     Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("employee_id", String(20), ForeignKey("employees.employee_id"), nullable=False),
+    Column("employee_id", String(20), ForeignKey("hrms.employees.employee_id"), nullable=False),
     Column("emp_name", String(180), nullable=False),
     Column("leave_type", String(60), nullable=False),
     Column("from_date", Date, nullable=False),
@@ -365,7 +367,7 @@ leave_balances_table = Table(
     "leave_balances",
     metadata,
     Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("employee_id", String(20), ForeignKey("employees.employee_id"), nullable=False),
+    Column("employee_id", String(20), ForeignKey("hrms.employees.employee_id"), nullable=False),
     Column("leave_type", String(60), nullable=False),
     Column("total", Integer, nullable=False, default=0),
     Column("used", Integer, nullable=False, default=0),
@@ -380,7 +382,7 @@ time_log_entries_table = Table(
     "time_log_entries",
     metadata,
     Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("employee_id", String(20), ForeignKey("employees.employee_id"), nullable=False),
+    Column("employee_id", String(20), ForeignKey("hrms.employees.employee_id"), nullable=False),
     Column("week_key", Date, nullable=False),  # Monday of the ISO week
     Column("date", Date, nullable=False),
     Column("project", String(200), nullable=False),
@@ -395,7 +397,7 @@ timesheets_table = Table(
     "timesheets",
     metadata,
     Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("employee_id", String(20), ForeignKey("employees.employee_id"), nullable=False),
+    Column("employee_id", String(20), ForeignKey("hrms.employees.employee_id"), nullable=False),
     Column("week_key", Date, nullable=False),
     Column("total_hours", Numeric(6, 2), nullable=False, default=0),
     Column("status", String(20), nullable=False, default="draft"),  # draft|submitted|approved|rejected
@@ -411,8 +413,8 @@ documents_table = Table(
     "documents",
     metadata,
     Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("employee_id",   String(20),  ForeignKey("employees.employee_id"), nullable=False),
-    Column("uploaded_by",   String(20),  ForeignKey("employees.employee_id"), nullable=False),
+    Column("employee_id",   String(20),  ForeignKey("hrms.employees.employee_id"), nullable=False),
+    Column("uploaded_by",   String(20),  ForeignKey("hrms.employees.employee_id"), nullable=False),
     Column("original_name", String(255), nullable=False),
     Column("stored_name",   String(255), nullable=False),   # uuid-based filename on disk
     Column("file_type",     String(80),  nullable=True),    # MIME type
@@ -444,7 +446,7 @@ payroll_statutory_config_table = Table(
     Column("label",       String(200),  nullable=False),
     Column("value",       String(500),  nullable=False),   # numeric value OR JSON string for slabs
     Column("description", String(500),  nullable=True),
-    Column("updated_by",  String(20),   ForeignKey("employees.employee_id"), nullable=True),
+    Column("updated_by",  String(20),   ForeignKey("hrms.employees.employee_id"), nullable=True),
     Column("updated_at",  DateTime,     nullable=False, default=datetime.utcnow),
 )
 
@@ -517,6 +519,31 @@ goals_table = Table(
     Column("updated_at",  DateTime,     nullable=False, default=datetime.utcnow),
 )
 
+performance_reviews_table = Table(
+    "performance_reviews",
+    metadata,
+    Column("id",          BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
+    Column("employee_id", String(20),   nullable=False),   # who is being reviewed
+    Column("reviewer_id", String(20),   nullable=True),    # who wrote the review (manager/HR)
+    Column("period",      String(40),   nullable=False),   # e.g. "Q2 2026" or "Annual 2025"
+    Column("score",       Float,        nullable=True),    # 1.0–5.0, null if TBD
+    Column("feedback",    Text,         nullable=True),
+    Column("status",      String(20),   nullable=False, default="pending"),  # pending | complete
+    Column("review_date", Date,         nullable=True),
+    Column("created_at",  DateTime,     nullable=False, default=datetime.utcnow),
+)
+
+employee_skills_table = Table(
+    "employee_skills",
+    metadata,
+    Column("id",          BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
+    Column("employee_id", String(20),   nullable=False),
+    Column("skill_name",  String(100),  nullable=False),
+    Column("score",       Float,        nullable=False),   # 1.0–5.0
+    Column("updated_by",  String(20),   nullable=True),    # employee_id of the person who set it
+    Column("updated_at",  DateTime,     nullable=False, default=datetime.utcnow),
+)
+
 
 # ── Serialisation helpers ─────────────────────────────────────────────────────
 
@@ -565,29 +592,30 @@ def init_database():
     # SQL Server auto-commits DDL internally, leaving no open transaction for
     # SQLAlchemy's engine.begin() to commit.  AUTOCOMMIT mode works on all dialects.
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as _ic:
-        _idx(_ic, "ix_att_emp_date",    "attendance",              "employee_id, date")
-        _idx(_ic, "ix_att_date",        "attendance",              "date")
-        _idx(_ic, "ix_cor_emp",         "attendance_corrections",  "employee_id")
-        _idx(_ic, "ix_cor_status",      "attendance_corrections",  "status")
-        _idx(_ic, "ix_lr_emp",          "leave_requests",          "employee_id")
-        _idx(_ic, "ix_lr_status",       "leave_requests",          "status")
-        _idx(_ic, "ix_lb_emp_fy",       "leave_balances",          "employee_id, fiscal_year")
-        _idx(_ic, "ix_tle_emp_wk",      "time_log_entries",        "employee_id, week_key")
-        _idx(_ic, "ix_ts_emp_wk",       "timesheets",              "employee_id, week_key")
-        _idx(_ic, "ix_ts_status",       "timesheets",              "status")
-        _idx(_ic, "ix_pli_emp_month",   "payslip_line_items",      "employee_id, payroll_month")
-        _idx(_ic, "ix_notif_recip",     "notifications",           "recipient_id, is_read")
-        _idx(_ic, "ix_doc_emp",         "documents",               "employee_id")
-        _idx(_ic, "ix_emp_mgr",         "employees",               "mgr_id")
+        _idx(_ic, "ix_att_emp_date",    "hrms.attendance",              "employee_id, date")
+        _idx(_ic, "ix_att_date",        "hrms.attendance",              "date")
+        _idx(_ic, "ix_cor_emp",         "hrms.attendance_corrections",  "employee_id")
+        _idx(_ic, "ix_cor_status",      "hrms.attendance_corrections",  "status")
+        _idx(_ic, "ix_lr_emp",          "hrms.leave_requests",          "employee_id")
+        _idx(_ic, "ix_lr_status",       "hrms.leave_requests",          "status")
+        _idx(_ic, "ix_lb_emp_fy",       "hrms.leave_balances",          "employee_id, fiscal_year")
+        _idx(_ic, "ix_tle_emp_wk",      "hrms.time_log_entries",        "employee_id, week_key")
+        _idx(_ic, "ix_ts_emp_wk",       "hrms.timesheets",              "employee_id, week_key")
+        _idx(_ic, "ix_ts_status",       "hrms.timesheets",              "status")
+        _idx(_ic, "ix_pli_emp_month",   "hrms.payslip_line_items",      "employee_id, payroll_month")
+        _idx(_ic, "ix_notif_recip",     "hrms.notifications",           "recipient_id, is_read")
+        _idx(_ic, "ix_doc_emp",         "hrms.documents",               "employee_id")
+        _idx(_ic, "ix_emp_mgr",         "hrms.employees",               "mgr_id")
 
-    # SQLite-only migration: add recovery_email if it was created before this column existed.
-    # MSSQL schema already includes this column, so skip it there.
-    if IS_SQLITE:
-        with engine.begin() as _conn:
-            try:
-                _conn.execute(text("ALTER TABLE employees ADD COLUMN recovery_email VARCHAR(200)"))
-            except Exception:
-                pass
+    # Migration: add must_change_password column to existing tables (safe to run on every startup).
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as _mc:
+        try:
+            if IS_SQLITE:
+                _mc.execute(text("ALTER TABLE hrms.employees ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 1"))
+            else:
+                _mc.execute(text("ALTER TABLE hrms.employees ADD must_change_password BIT NOT NULL DEFAULT 1"))
+        except Exception:
+            pass  # column already exists
 
     now = datetime.utcnow()
     with engine.begin() as conn:
@@ -615,7 +643,7 @@ def init_database():
         fy_start = today.year if today.month >= 4 else today.year - 1
         fiscal_year = f"{fy_start}-{str(fy_start + 1)[-2:]}"
         emp_rows = conn.execute(
-            select(employees_table.c.employee_id, employees_table.c.recovery_email)
+            select(employees_table.c.employee_id)
         ).fetchall()
         for row in emp_rows:
             emp_id = row._mapping["employee_id"]
@@ -652,16 +680,7 @@ def _calc_age(dob):
 def fetch_all_employees_full():
     """
     Returns every active employee as a list of frontend-shaped dicts.
-
-    Two-pass approach:
-      Pass 1 — load all rows from employees_table.
-      Pass 2 — build a reports_map (manager_id → [direct_report_ids]) by
-               scanning mgr_id on every row. This lets the frontend draw the
-               org chart without a recursive SQL query.
-
-    The returned shape matches what ALL_USERS expects in the frontend:
-      id, firstName, lastName, name, dept, role, accessLevel, ctcLPA,
-      joining, color, mgr, reports, loc, email, perf, isHR, etc.
+    Performance score is auto-computed from timesheets + goals (no manual input).
     """
     with engine.begin() as conn:
         rows = conn.execute(select(employees_table).order_by(employees_table.c.employee_id)).fetchall()
@@ -672,6 +691,9 @@ def fetch_all_employees_full():
     for e in emps:
         if e["mgr_id"] and e["mgr_id"] in reports_map:
             reports_map[e["mgr_id"]].append(e["employee_id"])
+
+    # Auto-compute performance scores from timesheets + goals.
+    perf_scores = compute_perf_scores_bulk()
 
     result = []
     for e in emps:
@@ -688,7 +710,7 @@ def fetch_all_employees_full():
             "reports": reports_map.get(e["employee_id"], []),
             "loc": e.get("location") or "", "email": e["email"],
             "phone": e.get("phone") or "",
-            "perf": float(e["perf_score"]) if e.get("perf_score") else 0,
+            "perf": perf_scores.get(e["employee_id"], 3.0),
             "dob": dob.isoformat() if dob else None,
             "age": _calc_age(dob), "gender": e.get("gender") or "",
             "aadhaar": e.get("aadhaar") or "", "pan": e.get("pan") or "",
@@ -697,8 +719,7 @@ def fetch_all_employees_full():
             "bank": e.get("bank_name") or "", "accountNo": e.get("bank_account_no") or "",
             "ifsc": e.get("ifsc") or "", "uan": e.get("uan") or "",
             "pfAccount": e.get("pf_account") or "", "esic": e.get("esic") or "",
-            "isHR": bool(e.get("is_hr")), "skills": [],
-            "recoveryEmail": e.get("recovery_email") or "",
+            "isHR": bool(e.get("is_hr")),
         })
     return result
 
@@ -747,8 +768,8 @@ def verify_login(email, password):
         "bank": emp.get("bank_name") or "", "accountNo": emp.get("bank_account_no") or "",
         "ifsc": emp.get("ifsc") or "", "uan": emp.get("uan") or "",
         "pfAccount": emp.get("pf_account") or "", "esic": emp.get("esic") or "",
-        "isHR": bool(emp.get("is_hr")), "skills": [],
-        "recoveryEmail": emp.get("recovery_email") or "",
+        "isHR": bool(emp.get("is_hr")),
+        "mustChangePassword": bool(emp.get("must_change_password", True)),
     }
 
 
@@ -1511,13 +1532,13 @@ def invalidate_reset_token(token_id: int):
 
 
 def change_employee_password(employee_id: str, new_password: str):
-    """Hashes and saves a new password for the employee. Returns True on success."""
+    """Hashes and saves a new password; clears the must_change_password flag."""
     new_hash = hash_password(new_password)
     with engine.begin() as conn:
         result = conn.execute(
             update(employees_table)
             .where(employees_table.c.employee_id == employee_id)
-            .values(password_hash=new_hash, updated_at=datetime.utcnow())
+            .values(password_hash=new_hash, must_change_password=False, updated_at=datetime.utcnow())
         )
     return result.rowcount > 0
 
@@ -1533,30 +1554,6 @@ def verify_current_password(employee_id: str, password: str):
     if not row:
         return False
     return verify_password(password, row._mapping["password_hash"])
-
-
-def get_recovery_email(employee_id: str):
-    """Returns the employee's pre-registered recovery email, or None if not set."""
-    with engine.begin() as conn:
-        row = conn.execute(
-            select(employees_table.c.recovery_email).where(
-                employees_table.c.employee_id == employee_id
-            )
-        ).first()
-    if not row:
-        return None
-    return row._mapping["recovery_email"]
-
-
-def update_recovery_email(employee_id: str, recovery_email: str):
-    """Sets or clears the employee's recovery email. Returns True on success."""
-    with engine.begin() as conn:
-        result = conn.execute(
-            update(employees_table)
-            .where(employees_table.c.employee_id == employee_id)
-            .values(recovery_email=recovery_email or None, updated_at=datetime.utcnow())
-        )
-    return result.rowcount > 0
 
 
 # ── Document queries ──────────────────────────────────────────────────────────
@@ -1733,3 +1730,211 @@ def update_goal(goal_id: int, **fields):
 def delete_goal(goal_id: int):
     with engine.begin() as conn:
         conn.execute(sql_delete(goals_table).where(goals_table.c.id == goal_id))
+
+
+# ── Performance Reviews ───────────────────────────────────────────────────────
+
+def fetch_reviews(employee_id: str):
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(performance_reviews_table)
+            .where(performance_reviews_table.c.employee_id == employee_id)
+            .order_by(performance_reviews_table.c.created_at.desc())
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def create_review(employee_id: str, reviewer_id: str, period: str,
+                  score, feedback: str, status: str, review_date):
+    with engine.begin() as conn:
+        result = conn.execute(
+            performance_reviews_table.insert().values(
+                employee_id=employee_id,
+                reviewer_id=reviewer_id,
+                period=period,
+                score=float(score) if score is not None else None,
+                feedback=feedback,
+                status=status,
+                review_date=review_date,
+                created_at=datetime.utcnow(),
+            )
+        )
+        row = conn.execute(
+            select(performance_reviews_table).where(
+                performance_reviews_table.c.id == result.inserted_primary_key[0]
+            )
+        ).first()
+    return {k: serialize(v) for k, v in row._mapping.items()}
+
+
+def update_review(review_id: int, **fields):
+    allowed = {"score", "feedback", "status", "review_date", "period"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return None
+    with engine.begin() as conn:
+        conn.execute(
+            performance_reviews_table.update()
+            .where(performance_reviews_table.c.id == review_id)
+            .values(**updates)
+        )
+        row = conn.execute(
+            select(performance_reviews_table).where(
+                performance_reviews_table.c.id == review_id
+            )
+        ).first()
+    return {k: serialize(v) for k, v in row._mapping.items()} if row else None
+
+
+def delete_review(review_id: int):
+    with engine.begin() as conn:
+        conn.execute(
+            sql_delete(performance_reviews_table).where(
+                performance_reviews_table.c.id == review_id
+            )
+        )
+
+
+# ── Employee Skills ───────────────────────────────────────────────────────────
+
+def fetch_skills(employee_id: str):
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(employee_skills_table)
+            .where(employee_skills_table.c.employee_id == employee_id)
+            .order_by(employee_skills_table.c.skill_name)
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def upsert_skill(employee_id: str, skill_name: str, score: float, updated_by: str):
+    with engine.begin() as conn:
+        existing = conn.execute(
+            select(employee_skills_table).where(
+                (employee_skills_table.c.employee_id == employee_id) &
+                (employee_skills_table.c.skill_name == skill_name)
+            )
+        ).first()
+        if existing:
+            conn.execute(
+                employee_skills_table.update()
+                .where(employee_skills_table.c.id == existing.id)
+                .values(score=score, updated_by=updated_by, updated_at=datetime.utcnow())
+            )
+            row_id = existing.id
+        else:
+            result = conn.execute(
+                employee_skills_table.insert().values(
+                    employee_id=employee_id,
+                    skill_name=skill_name,
+                    score=score,
+                    updated_by=updated_by,
+                    updated_at=datetime.utcnow(),
+                )
+            )
+            row_id = result.inserted_primary_key[0]
+        row = conn.execute(
+            select(employee_skills_table).where(employee_skills_table.c.id == row_id)
+        ).first()
+    return {k: serialize(v) for k, v in row._mapping.items()}
+
+
+def delete_skill(skill_id: int):
+    with engine.begin() as conn:
+        conn.execute(
+            sql_delete(employee_skills_table).where(employee_skills_table.c.id == skill_id)
+        )
+
+
+def compute_perf_scores_bulk():
+    """
+    Auto-computes a 1.0–5.0 performance score for every employee based on
+    objective work-log data — no manual input required.
+
+    Formula (rounded to 1 decimal):
+      Timesheet score (60%): last 12 weeks
+        approved = 1.0 pt, submitted/pending = 0.6 pt, rejected = 0.2 pt, missing = 0
+        → (total_pts / 12) * 5, capped at 5.0
+      Goals score (40%): current quarter
+        on-track = 1.0 pt, at-risk = 0.4 pt per goal
+        → (total_pts / max(1, n_goals)) * 5, capped at 5.0
+        if no goals at all → neutral 3.0
+
+    Returns dict: { employee_id: float }
+    """
+    from datetime import date as _date, timedelta as _td
+
+    today = _date.today()
+    # Build list of the last 12 Monday dates (ISO week starts)
+    mondays = []
+    d = today - _td(days=today.weekday())  # this week's Monday
+    for _ in range(12):
+        mondays.append(d)
+        d -= _td(weeks=1)
+    cutoff = mondays[-1]  # earliest week we care about
+
+    # Determine current quarter label (matches frontend currentQuarterLabel)
+    q_num = (today.month - 1) // 3 + 1
+    current_quarter = f"Q{q_num}-{today.year}"
+
+    with engine.connect() as conn:
+        # Fetch all timesheets in the last 12 weeks
+        ts_rows = conn.execute(
+            select(timesheets_table.c.employee_id, timesheets_table.c.week_key, timesheets_table.c.status)
+            .where(timesheets_table.c.week_key >= cutoff)
+        ).fetchall()
+
+        # Fetch all goals for current quarter
+        goal_rows = conn.execute(
+            select(goals_table.c.employee_id, goals_table.c.status)
+            .where(goals_table.c.quarter == current_quarter)
+        ).fetchall()
+
+        # Fetch all employee IDs
+        emp_ids = [r[0] for r in conn.execute(select(employees_table.c.employee_id)).fetchall()]
+
+    # Build timesheet score per employee
+    ts_pts = {eid: 0.0 for eid in emp_ids}
+    for row in ts_rows:
+        eid, wk, st = row.employee_id, row.week_key, row.status
+        if st == "approved":   ts_pts[eid] = ts_pts.get(eid, 0.0) + 1.0
+        elif st in ("submitted", "draft"): ts_pts[eid] = ts_pts.get(eid, 0.0) + 0.6
+        elif st == "rejected": ts_pts[eid] = ts_pts.get(eid, 0.0) + 0.2
+
+    # Build goals score per employee
+    goal_pts  = {}
+    goal_count = {}
+    for row in goal_rows:
+        eid, st = row.employee_id, row.status
+        goal_count[eid] = goal_count.get(eid, 0) + 1
+        goal_pts[eid]   = goal_pts.get(eid, 0.0) + (1.0 if st == "on-track" else 0.4)
+
+    scores = {}
+    for eid in emp_ids:
+        ts_score   = min(5.0, (ts_pts.get(eid, 0.0) / 12) * 5)
+        n_goals    = goal_count.get(eid, 0)
+        if n_goals:
+            g_score = min(5.0, (goal_pts.get(eid, 0.0) / n_goals) * 5)
+        else:
+            g_score = 3.0   # neutral — no goals set yet
+        if ts_pts.get(eid, 0.0) == 0 and n_goals == 0:
+            scores[eid] = 3.0   # new / no data yet
+        else:
+            raw = 0.6 * ts_score + 0.4 * g_score
+            scores[eid] = round(max(1.0, min(5.0, raw)), 1)
+    return scores
+
+
+def fetch_attendance_date_range():
+    """Returns the earliest and latest attendance date recorded in the database."""
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(
+                func.min(attendance_table.c.date).label("earliest"),
+                func.max(attendance_table.c.date).label("latest"),
+            )
+        ).first()
+    return {
+        "earliest": serialize(row.earliest) if row.earliest else None,
+        "latest":   serialize(row.latest)   if row.latest   else None,
+    }

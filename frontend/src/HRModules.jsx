@@ -608,6 +608,87 @@ const GS = () => (
       .login-right { padding: 32px 24px !important; }
       .login-mobile-logo { display: flex !important; align-items: center; gap: 10px; margin-bottom: 28px; }
     }
+
+    /* ── RESPONSIVE APP SHELL ─────────────────────────────────────────────── */
+    /* Hamburger toggle — hidden on desktop, shown on tablet/mobile */
+    .tb-hamburger {
+      display: none;
+      width: 36px; height: 36px;
+      border: none; background: transparent; cursor: pointer;
+      flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+      padding: 0; flex-shrink: 0; margin-right: 2px;
+    }
+    .tb-hamburger span {
+      display: block; width: 18px; height: 2px;
+      background: var(--ink3); border-radius: 2px; transition: all 0.2s;
+    }
+
+    /* Sidebar slide-in overlay */
+    .sb-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.42); z-index: 98;
+    }
+    .sb-overlay.visible { display: block; }
+
+    /* ── TABLET  (≤ 768px) ─────────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      /* Show hamburger, slim topbar brand */
+      .tb-hamburger { display: flex; }
+      .tb-brand { width: auto; padding: 0 10px 0 14px; border-right: none; }
+      .tb-wordmark { display: none; }
+      .tb-search { display: none; }
+      .tb-clock { display: none; }
+
+      /* Sidebar becomes a slide-in drawer */
+      .sidebar { width: 242px !important; left: -252px; transition: left 0.26s cubic-bezier(0.16,1,0.3,1), box-shadow 0.26s; z-index: 150; }
+      .sidebar.open { left: 0; box-shadow: 0 28px 72px rgba(0,0,0,0.22), 0 8px 24px rgba(0,0,0,0.1); }
+
+      /* Main content takes full width */
+      .main { left: 0 !important; }
+      .main-inner { padding: 20px 16px; }
+
+      /* Stats grid → 2 columns */
+      .sg { grid-template-columns: 1fr 1fr; }
+
+      /* Page header stacks on mobile */
+      .ph { flex-direction: column; gap: 12px; align-items: flex-start; }
+
+      /* Form grids → single column */
+      .fg { grid-template-columns: 1fr; }
+
+      /* Info key-value pairs → single column */
+      .info-grid { grid-template-columns: 1fr; }
+
+      /* 2-col utility → single column */
+      .g2 { grid-template-columns: 1fr; }
+
+      /* Tabs scroll instead of wrapping */
+      .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .tab { white-space: nowrap; }
+
+      /* Modal fills screen */
+      .modal { width: 96vw !important; max-width: 96vw; }
+
+      /* Login box */
+      .login-box { width: 92vw; padding: 28px 18px; }
+    }
+
+    /* ── MOBILE  (≤ 480px) ─────────────────────────────────────────────────── */
+    @media (max-width: 480px) {
+      .main-inner { padding: 14px 10px; }
+      .ph-title { font-size: 19px; }
+      .sc-val { font-size: 24px; }
+      .sc { padding: 14px 14px 12px; }
+      .sg { gap: 8px; margin-bottom: 16px; }
+      .card { border-radius: var(--r10); margin-bottom: 12px; }
+      .ch { padding: 12px 14px; }
+      .cb { padding: 12px 14px; }
+      .btn { font-size: 12px; padding: 5px 10px; }
+      .btn-sm { padding: 3px 8px; font-size: 11px; }
+      .tb-uname { font-size: 11.5px; }
+      .tb-urole { display: none; }
+      .sign-out-label { display: none; }
+    }
   `}</style>
 );
 
@@ -774,12 +855,6 @@ const CURRENT_YEAR = TODAY.getFullYear();
 const CURRENT_MONTH_INDEX = TODAY.getMonth();                                // 0-based
 const CURRENT_MONTH_KEY = `${CURRENT_YEAR}-${pad2(CURRENT_MONTH_INDEX + 1)}`; // "YYYY-MM" selector key
 
-// Builds an array of the last `count` month keys for the month-picker dropdowns.
-const buildRecentMonthKeys = (count = 5) => Array.from({ length:count }, (_, i) => {
-  const d = new Date(CURRENT_YEAR, CURRENT_MONTH_INDEX - (count - 1 - i), 1);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-});
-
 // Returns a quarter label like "Q3 2025". `offset` shifts forward/backward
 // by that many quarters relative to today (e.g. offset=-1 → previous quarter).
 const currentQuarterLabel = (offset = 0) => {
@@ -864,39 +939,32 @@ const LoginScreen = ({ onLogin }) => {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Forgot-password state
-  // step: null | "request" | "otp" | "done"
+  // Forgot-password state — step: null | "request" | "otp" | "done"
   const [fpStep, setFpStep] = useState(null);
-  const [fpAccountEmail, setFpAccountEmail] = useState("");
-  const [fpRealEmail, setFpRealEmail] = useState("");
+  const [fpEmail, setFpEmail] = useState("");
+  const [fpMasked, setFpMasked] = useState("");
   const [fpOtp, setFpOtp] = useState("");
   const [fpNewPass, setFpNewPass] = useState("");
-  const [fpConfirmPass, setFpConfirmPass] = useState("");
+  const [fpConfirm, setFpConfirm] = useState("");
   const [fpErr, setFpErr] = useState("");
-  const [fpMsg, setFpMsg] = useState("");
   const [fpLoading, setFpLoading] = useState(false);
 
   const resetFp = () => {
-    setFpStep(null); setFpAccountEmail(""); setFpRealEmail(""); setFpOtp("");
-    setFpNewPass(""); setFpConfirmPass(""); setFpErr(""); setFpMsg("");
+    setFpStep(null); setFpEmail(""); setFpMasked(""); setFpOtp("");
+    setFpNewPass(""); setFpConfirm(""); setFpErr("");
   };
 
   const sendOtp = async () => {
-    if (!fpAccountEmail.trim()) { setFpErr("Enter your company email."); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fpAccountEmail.trim())) { setFpErr("Enter a valid company email address."); return; }
-    setFpLoading(true); setFpErr(""); setFpMsg("");
+    if (!fpEmail.trim()) { setFpErr("Enter your company email."); return; }
+    setFpLoading(true); setFpErr("");
     try {
       const res = await fetch(`${API_URL}/api/auth/forgot-password`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ accountEmail: fpAccountEmail.trim() }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountEmail: fpEmail.trim() }),
       });
       const data = await res.json();
       if (!res.ok) { setFpErr(data.detail || "Failed to send OTP."); return; }
-      if (data.noRecovery) {
-        setFpErr("No recovery email is registered for this account. Please contact HR to reset your password.");
-        return;
-      }
-      setFpMsg(`OTP sent to ${data.maskedEmail}. Check your inbox.`);
+      setFpMasked(data.maskedEmail);
       setFpStep("otp");
     } catch { setFpErr("Cannot reach server. Please try again."); }
     finally { setFpLoading(false); }
@@ -905,13 +973,15 @@ const LoginScreen = ({ onLogin }) => {
   const verifyAndReset = async () => {
     if (!fpOtp.trim()) { setFpErr("Enter the OTP."); return; }
     if (!fpNewPass) { setFpErr("Enter a new password."); return; }
-    if (fpNewPass.length < 6) { setFpErr("Password must be at least 6 characters."); return; }
-    if (fpNewPass !== fpConfirmPass) { setFpErr("Passwords do not match."); return; }
+    if (fpNewPass.length < 8 || !/\d/.test(fpNewPass) || !/[^a-zA-Z0-9]/.test(fpNewPass)) {
+      setFpErr("Password must be at least 8 characters, include a number and a special character."); return;
+    }
+    if (fpNewPass !== fpConfirm) { setFpErr("Passwords do not match."); return; }
     setFpLoading(true); setFpErr("");
     try {
       const res = await fetch(`${API_URL}/api/auth/reset-password`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ accountEmail: fpAccountEmail.trim(), otp: fpOtp.trim(), newPassword: fpNewPass }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountEmail: fpEmail.trim(), otp: fpOtp.trim(), newPassword: fpNewPass }),
       });
       const data = await res.json();
       if (!res.ok) { setFpErr(data.detail || "OTP verification failed."); return; }
@@ -919,6 +989,9 @@ const LoginScreen = ({ onLogin }) => {
     } catch { setFpErr("Cannot reach server. Please try again."); }
     finally { setFpLoading(false); }
   };
+
+  const fpBtn = (busy) => ({ width:"100%", padding:"12px", borderRadius:10, border:"none", background: busy ? "#93c5fd" : "#2563eb", color:"#fff", fontSize:14, fontWeight:700, cursor: busy ? "not-allowed" : "pointer", marginBottom:8, fontFamily:"inherit" });
+  const inp = { width:"100%", padding:"11px 14px", borderRadius:10, border:"1.5px solid #e2e8f0", background:"#fff", fontSize:13.5, color:"#0f172a", outline:"none", boxSizing:"border-box", marginBottom:12, fontFamily:"inherit" };
 
   const tryLogin = async () => {
     if (!email || !pass) { setErr("Enter email and password."); return; }
@@ -929,13 +1002,6 @@ const LoginScreen = ({ onLogin }) => {
     } catch { setErr("Cannot reach server. Please try again."); }
     finally { setLoading(false); }
   };
-
-  const demoAccounts = ALL_USERS;
-
-  // ── Inline styles shared across the forgot-password panel ──
-  const inp = { width:"100%", padding:"11px 14px", borderRadius:10, border:"1.5px solid #e2e8f0", background:"#fff", fontSize:13.5, color:"#0f172a", outline:"none", boxSizing:"border-box", marginBottom:12, fontFamily:"inherit" };
-  const fpBtn = (busy) => ({ width:"100%", padding:"12px", borderRadius:10, border:"none", background: busy ? "#93c5fd" : "#2563eb", color:"#fff", fontSize:14, fontWeight:700, cursor: busy ? "not-allowed" : "pointer", marginBottom:8, fontFamily:"inherit" });
-
 
   return (
     <div style={{ position:"fixed", top:0, left:0, right:0, bottom:0, display:"flex", flexDirection:"row", fontFamily:"Inter, 'Plus Jakarta Sans', sans-serif", overflow:"hidden" }}>
@@ -1043,53 +1109,13 @@ const LoginScreen = ({ onLogin }) => {
         </button>
 
         {/* Forgot password link */}
-        <div style={{ textAlign:"center", marginBottom:20 }}>
-          <button
-            onClick={() => { setFpStep("request"); setFpErr(""); setFpMsg(""); }}
-            style={{ background:"none", border:"none", color:"#2563eb", fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}
-          >
+        <div style={{ textAlign:"center", marginTop:14 }}>
+          <button onClick={() => { setFpStep("request"); setFpErr(""); }}
+            style={{ background:"none", border:"none", color:"#2563eb", fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
             Forgot your password?
           </button>
         </div>
 
-        {/* Divider */}
-        <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20 }}>
-          <div style={{ flex:1, height:1, background:"#e2e8f0" }}/>
-          <span style={{ fontSize:11, color:"#cbd5e1", fontWeight:500, whiteSpace:"nowrap" }}>Quick access — demo accounts</span>
-          <div style={{ flex:1, height:1, background:"#e2e8f0" }}/>
-        </div>
-
-        {/* Profile chips grid */}
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:20 }}>
-          {demoAccounts.map(u => {
-            const initials = `${u.firstName[0]}${u.lastName[0]}`;
-            return (
-              <button
-                key={u.id}
-                onClick={() => onLogin(u)}
-                style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 11px", borderRadius:12, border:"1.5px solid #e2e8f0", background:"#fff", cursor:"pointer", textAlign:"left", transition:"all 0.15s", fontFamily:"inherit" }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor="#bfdbfe"; e.currentTarget.style.background="#eff6ff"; e.currentTarget.style.transform="translateY(-1px)"; e.currentTarget.style.boxShadow="0 4px 12px rgba(59,130,246,0.1)"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor="#e2e8f0"; e.currentTarget.style.background="#fff"; e.currentTarget.style.transform="none"; e.currentTarget.style.boxShadow="none"; }}
-              >
-                <div style={{ width:32, height:32, borderRadius:"50%", background:u.color, display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:700, color:"#fff", flexShrink:0, letterSpacing:"0.03em" }}>
-                  {initials}
-                </div>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:12, fontWeight:700, color:"#1e293b", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                    {u.firstName} {u.lastName.charAt(0)}.
-                  </div>
-                  <div style={{ fontSize:10, color:"#94a3b8", marginTop:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{u.role}</div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Password hint */}
-        <p className="text-slate-400 text-xs text-center" style={{ margin:0, lineHeight:1.6 }}>
-          Passwords:&nbsp;
-          <span style={{ fontFamily:"ui-monospace, monospace" }}>dir123 / mgr123 / lead123 / emp123</span>
-        </p>
         </div>{/* end inner centering wrapper */}
       </div>
 
@@ -1098,7 +1124,6 @@ const LoginScreen = ({ onLogin }) => {
         <div style={{ position:"fixed", inset:0, background:"rgba(8,12,25,0.52)", backdropFilter:"blur(8px)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:500 }}>
           <div style={{ background:"#fff", borderRadius:16, width:420, maxWidth:"94vw", boxShadow:"0 24px 64px rgba(0,0,0,0.18)", overflow:"hidden" }}>
 
-            {/* Modal header */}
             <div style={{ background:"#0d0d0e", padding:"18px 22px", borderLeft:"5px solid #1B45F5", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
               <div>
                 <div style={{ color:"#fff", fontWeight:800, fontSize:15 }}>
@@ -1111,22 +1136,16 @@ const LoginScreen = ({ onLogin }) => {
 
             <div style={{ padding:"28px 24px" }}>
 
-              {/* Step 1 — Request OTP */}
+              {/* Step 1 — Enter company email */}
               {fpStep === "request" && (
                 <>
                   <p style={{ fontSize:13.5, color:"#475569", marginBottom:20, lineHeight:1.6 }}>
-                    Enter your <strong>company email</strong>. The OTP will be sent to your <strong>registered recovery email</strong> on file.
+                    Enter your <strong>company email</strong>. A 6-digit OTP will be sent to that address.
                   </p>
                   <label style={{ fontSize:11.5, fontWeight:700, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.05em" }}>Company Email</label>
-                  <input
-                    style={inp} type="email" placeholder="you@doloxe.com"
-                    value={fpAccountEmail}
-                    onChange={e => { setFpAccountEmail(e.target.value); setFpErr(""); }}
-                    onKeyDown={e => e.key === "Enter" && sendOtp()}
-                  />
-                  <div style={{ background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:8, padding:"10px 14px", fontSize:12, color:"#64748b", marginBottom:16, lineHeight:1.6 }}>
-                    💡 Haven't set a recovery email yet? Sign in first, click your name in the top bar, then set it under <strong>Recovery Email</strong>.
-                  </div>
+                  <input style={inp} type="email" placeholder="you@doloxe.com"
+                    value={fpEmail} onChange={e => { setFpEmail(e.target.value); setFpErr(""); }}
+                    onKeyDown={e => e.key === "Enter" && sendOtp()}/>
                   {fpErr && <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:8, padding:"8px 12px", fontSize:12.5, color:"#dc2626", marginBottom:12 }}>{fpErr}</div>}
                   <button style={fpBtn(fpLoading)} onClick={sendOtp} disabled={fpLoading}>
                     {fpLoading ? "Sending OTP…" : "Send OTP →"}
@@ -1137,39 +1156,30 @@ const LoginScreen = ({ onLogin }) => {
                 </>
               )}
 
-              {/* Step 2 — Verify OTP + Set New Password */}
+              {/* Step 2 — OTP + new password */}
               {fpStep === "otp" && (
                 <>
-                  {fpMsg && <div style={{ background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:8, padding:"8px 12px", fontSize:12.5, color:"#16a34a", marginBottom:14 }}>{fpMsg}</div>}
                   <p style={{ fontSize:13, color:"#475569", marginBottom:18, lineHeight:1.6 }}>
-                    Enter the 6-digit OTP sent to <strong>{fpRealEmail}</strong> and choose a new password.
+                    OTP sent to <strong>{fpMasked}</strong>. Enter it below along with your new password.
                   </p>
                   <label style={{ fontSize:11.5, fontWeight:700, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.05em" }}>6-digit OTP</label>
-                  <input
-                    style={{ ...inp, fontFamily:"monospace", fontSize:20, letterSpacing:8, textAlign:"center" }}
+                  <input style={{ ...inp, fontFamily:"monospace", fontSize:20, letterSpacing:8, textAlign:"center" }}
                     placeholder="000000" maxLength={6}
-                    value={fpOtp}
-                    onChange={e => setFpOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  />
+                    value={fpOtp} onChange={e => setFpOtp(e.target.value.replace(/\D/g,"").slice(0,6))}/>
                   <label style={{ fontSize:11.5, fontWeight:700, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.05em" }}>New Password</label>
-                  <input
-                    style={inp} type="password" placeholder="Min 6 characters"
-                    value={fpNewPass}
-                    onChange={e => setFpNewPass(e.target.value)}
-                  />
+                  <input style={inp} type="password" placeholder="Min 8 chars, 1 number, 1 special char"
+                    value={fpNewPass} onChange={e => { setFpNewPass(e.target.value); setFpErr(""); }}/>
                   <label style={{ fontSize:11.5, fontWeight:700, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.05em" }}>Confirm New Password</label>
-                  <input
-                    style={inp} type="password" placeholder="Re-enter new password"
-                    value={fpConfirmPass}
-                    onChange={e => setFpConfirmPass(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && verifyAndReset()}
-                  />
+                  <input style={inp} type="password" placeholder="Re-enter new password"
+                    value={fpConfirm} onChange={e => { setFpConfirm(e.target.value); setFpErr(""); }}
+                    onKeyDown={e => e.key === "Enter" && verifyAndReset()}/>
                   {fpErr && <div style={{ background:"#fef2f2", border:"1px solid #fecaca", borderRadius:8, padding:"8px 12px", fontSize:12.5, color:"#dc2626", marginBottom:12 }}>{fpErr}</div>}
                   <button style={fpBtn(fpLoading)} onClick={verifyAndReset} disabled={fpLoading}>
                     {fpLoading ? "Resetting…" : "Reset Password →"}
                   </button>
-                  <button onClick={() => { setFpStep("request"); setFpErr(""); setFpOtp(""); setFpMsg(""); }} style={{ width:"100%", padding:"10px", borderRadius:10, border:"1.5px solid #e2e8f0", background:"transparent", color:"#64748b", fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>
-                    ← Change Email / Resend OTP
+                  <button onClick={() => { setFpStep("request"); setFpErr(""); setFpOtp(""); }}
+                    style={{ width:"100%", padding:"10px", borderRadius:10, border:"1.5px solid #e2e8f0", background:"transparent", color:"#64748b", fontSize:13, cursor:"pointer", fontFamily:"inherit" }}>
+                    ← Re-enter email
                   </button>
                 </>
               )}
@@ -1182,12 +1192,7 @@ const LoginScreen = ({ onLogin }) => {
                   <p style={{ fontSize:13.5, color:"#64748b", marginBottom:24, lineHeight:1.6 }}>
                     Your password has been updated. You can now sign in with your new password.
                   </p>
-                  <button
-                    onClick={resetFp}
-                    style={{ ...fpBtn(false), marginBottom:0 }}
-                  >
-                    Back to Sign In
-                  </button>
+                  <button style={{ ...fpBtn(false), marginBottom:0 }} onClick={resetFp}>Back to Sign In</button>
                 </div>
               )}
 
@@ -1230,6 +1235,8 @@ const AttendanceMod = ({ currentUser }) => {
   const [corrForm, setCorrForm] = useState({ date:"", reason:"" });
   const [corrError, setCorrError] = useState("");
   const [corrSaving, setCorrSaving] = useState(false);
+  // Dynamic month list for Reports dropdown — built from actual DB date range
+  const [rptMonths, setRptMonths] = useState([CURRENT_MONTH_KEY]);
 
   const canViewTeam = hasTeamReports(currentUser) || canViewAttendanceReports(currentUser);
   const canViewReports = canViewAttendanceReports(currentUser);
@@ -1273,6 +1280,27 @@ const AttendanceMod = ({ currentUser }) => {
       .catch(() => setCorrections([]))
       .finally(() => setCorrLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Build Reports dropdown from actual DB date range
+  useEffect(() => {
+    fetch(`${API_URL}/api/attendance/date-range`)
+      .then(r => r.json())
+      .then(({ earliest, latest }) => {
+        if (!earliest) return;
+        const end = latest ? latest.slice(0, 7) : CURRENT_MONTH_KEY;
+        const [ey, em] = earliest.slice(0, 7).split("-").map(Number);
+        const [ly, lm] = end.split("-").map(Number);
+        const keys = [];
+        let y = ey, m = em;
+        while (y < ly || (y === ly && m <= lm)) {
+          keys.push(`${y}-${String(m).padStart(2, "0")}`);
+          m++; if (m > 12) { m = 1; y++; }
+        }
+        if (!keys.includes(CURRENT_MONTH_KEY)) keys.push(CURRENT_MONTH_KEY);
+        setRptMonths(keys.reverse());
+      })
+      .catch(() => {});
+  }, []);
 
   const getMonthStats = (attData) => {
     let present=0, absent=0, late=0, leave=0, holidays=0;
@@ -1337,7 +1365,8 @@ const AttendanceMod = ({ currentUser }) => {
     .filter(r => canApproveAttendance || (r.employee_id || r.empId) === currentUser.id)
     .filter(r => corrFilter === "all" || r.status === corrFilter);
   const pendingCorrections = corrections.filter(r => r.status === "pending");
-  const months = buildRecentMonthKeys();
+  const availYears = [...new Set([...rptMonths.map(m => m.slice(0,4)), String(CURRENT_YEAR)])].sort().reverse();
+  const MONTH_NAMES_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const monthLabel = (m) => { const [y,mo]=m.split("-"); return new Date(+y,+mo-1,1).toLocaleDateString("en-IN",{month:"long",year:"numeric"}); };
 
   const statusText = (s) => {
@@ -1422,8 +1451,11 @@ const AttendanceMod = ({ currentUser }) => {
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center" }}>
           <button className="btn btn-p" onClick={()=>{ setCorrError(""); setCorrModal(true); }}><Icon n="plus" s={13}/>Missed Punch Request</button>
-          <select className="fsel" style={{ width:170 }} value={selMonth} onChange={e=>setSelMonth(e.target.value)}>
-            {months.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}
+          <select className="fsel" style={{ width:82 }} value={selMonth.slice(0,4)} onChange={e=>setSelMonth(`${e.target.value}-${selMonth.slice(5,7)}`)}>
+            {availYears.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+          <select className="fsel" style={{ width:90 }} value={selMonth.slice(5,7)} onChange={e=>setSelMonth(`${selMonth.slice(0,4)}-${e.target.value}`)}>
+            {MONTH_NAMES_SHORT.map((n,i)=><option key={i} value={pad2(i+1)}>{n}</option>)}
           </select>
         </div>
       </div>
@@ -1659,7 +1691,9 @@ const AttendanceMod = ({ currentUser }) => {
 
       {tab==="reports" && canViewReports && (
         <div className="card">
-          <div className="ch"><div className="ct"><Icon n="analytics" s={14}/>Organisation Attendance — {monthLabel(selMonth)}</div></div>
+          <div className="ch">
+            <div className="ct"><Icon n="analytics" s={14}/>Organisation Attendance — {monthLabel(selMonth)}</div>
+          </div>
           <div className="tw" style={{ maxHeight:500, overflowY:"auto",overscrollBehavior:"none" }}>
             <table>
               <thead><tr><th>Employee</th><th>Dept</th><th>Present</th><th>Late</th><th>Absent</th><th>Leave</th><th>Holidays</th><th>Rate</th></tr></thead>
@@ -3600,45 +3634,14 @@ const DirectoryMod = ({ currentUser }) => {
   const [srch, setSrch] = useState("");
   const [fil, setFil] = useState("All");
   const [profTab, setProfTab] = useState("profile");
-  // HR recovery-email management state
-  const [recEdit, setRecEdit]       = useState(false);
-  const [recVal,  setRecVal]        = useState("");
-  const [recMsg,  setRecMsg]        = useState("");
-  const [recErr,  setRecErr]        = useState("");
-  const [recLoading, setRecLoading] = useState(false);
-  // Local cache so saves are reflected immediately without re-fetching ALL_USERS
-  const [recoveryEmails, setRecoveryEmails] = useState({});
 
   const depts = useMemo(() => ["All",...[...new Set(visibleEmps.map(e=>e.dept))]], [visibleEmps]);
   const filtered = useMemo(() => visibleEmps.filter(e=>(fil==="All"||e.dept===fil)&&(e.name.toLowerCase().includes(srch.toLowerCase())||e.role.toLowerCase().includes(srch.toLowerCase()))), [visibleEmps, fil, srch]);
   const emp = visibleEmps.find(e=>e.id===sel)||currentUser;
   const canSeeSensitive = canSeeSensitiveOf(currentUser, sel);
-  const getRecoveryEmail = id => recoveryEmails[id] !== undefined ? recoveryEmails[id] : (ALL_USERS.find(e=>e.id===id)?.recoveryEmail || "");
   const handleSelectEmployee = id => {
     setSel(id);
     setProfTab("profile");
-    setRecEdit(false);
-    setRecMsg("");
-    setRecErr("");
-    setRecVal(getRecoveryEmail(id));
-  };
-
-  const saveRecoveryEmail = async () => {
-    if (!recVal.trim()) { setRecErr("Enter a recovery email address."); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recVal.trim())) { setRecErr("Enter a valid email address."); return; }
-    setRecLoading(true); setRecErr("");
-    try {
-      const res = await fetch(`${API_URL}/api/hr/recovery-email/${sel}`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recoveryEmail: recVal.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setRecErr(data.detail || "Failed to save."); return; }
-      setRecoveryEmails(p => ({ ...p, [sel]: recVal.trim() }));
-      setRecEdit(false);
-      setRecMsg("✓ Recovery email updated.");
-    } catch { setRecErr("Network error. Try again."); }
-    finally { setRecLoading(false); }
   };
 
   return (
@@ -3692,36 +3695,8 @@ const DirectoryMod = ({ currentUser }) => {
                     {[["First Name",emp.firstName],["Last Name",emp.lastName],["Date of Birth",canSeeSensitive?emp.dob:"••••••••"],["Age",`${emp.age} years`],["Gender",emp.gender],["Email",emp.email],["Phone",canSeeSensitive?emp.phone:"+91 •••••• ••••"],["Location",emp.loc]].map(([k,v])=><div key={k} className="if"><div className="if-l">{k}</div><div style={{ fontWeight:600,fontSize:12.5 }}>{v}</div></div>)}
                   </div>
                   <div className="sep"/>
-                  <div className="flbl" style={{ marginBottom:8 }}>Skills</div>
-                  <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:14 }}>{emp.skills.map(sk=><span key={sk} style={{ padding:"3px 10px",borderRadius:"var(--r999)",background:"var(--accent-soft)",color:"var(--accent)",fontSize:11,fontWeight:650 }}>{sk}</span>)}</div>
-                  <div className="sep"/>
                   <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center" }}><div className="flbl">Performance Score</div><div style={{ fontFamily:"var(--mono)",fontWeight:750,fontSize:16,color:emp.perf>=4.5?"var(--green)":emp.perf>=4?"var(--amber)":"var(--red)" }}>{emp.perf}/5.0</div></div>
                   <div className="pt" style={{ height:6 }}><div className="pf" style={{ width:`${(emp.perf/5)*100}%`,background:emp.perf>=4.5?"var(--green)":emp.perf>=4?"var(--amber)":"var(--red)" }}/></div>
-                  {canViewDirectory && (<>
-                    <div className="sep" style={{ marginTop:14 }}/>
-                    <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6 }}>
-                      <div>
-                        <div className="flbl">Recovery Email</div>
-                        <div style={{ fontSize:10.5,color:"var(--ink4)",marginTop:1 }}>HR Admin · used for password reset OTP</div>
-                      </div>
-                      {!recEdit && <button className="btn btn-sm" onClick={()=>{ setRecEdit(true); setRecMsg(""); }}>Edit</button>}
-                    </div>
-                    {!recEdit ? (
-                      <div style={{ fontSize:12.5,fontWeight:600,color:(recoveryEmails[sel]!==undefined?recoveryEmails[sel]:emp.recoveryEmail)?"var(--ink)":"var(--ink4)",fontStyle:(recoveryEmails[sel]!==undefined?recoveryEmails[sel]:emp.recoveryEmail)?"normal":"italic" }}>
-                        {(recoveryEmails[sel]!==undefined?recoveryEmails[sel]:emp.recoveryEmail)||"Not set — employee can update via Security Settings"}
-                      </div>
-                    ) : (
-                      <div>
-                        <input className="finp" type="email" placeholder="personal@gmail.com" value={recVal} onChange={e=>{ setRecVal(e.target.value); setRecErr(""); }} style={{ marginBottom:6 }}/>
-                        {recErr && <div style={{ fontSize:12,color:"var(--red)",marginBottom:6 }}>{recErr}</div>}
-                        <div style={{ display:"flex",gap:6 }}>
-                          <button className="btn btn-sm" onClick={()=>{ setRecEdit(false); setRecErr(""); }}>Cancel</button>
-                          <button className="btn btn-sm btn-p" onClick={saveRecoveryEmail} disabled={recLoading}>{recLoading?"Saving…":"Save"}</button>
-                        </div>
-                      </div>
-                    )}
-                    {recMsg && <div style={{ fontSize:12,color:"var(--green)",marginTop:6 }}>{recMsg}</div>}
-                  </>)}
                 </div>
               )}
               {profTab==="identity"&&canSeeSensitive&&(
@@ -3904,19 +3879,41 @@ const PerfMod = ({ currentUser }) => {
   const [gStatus, setGStatus]   = useState("on-track");
   const [gIsKey, setGIsKey]     = useState(false);
   const [gSaving, setGSaving]   = useState(false);
-  const reviews = [];
-  const skills  = [];
+  const [reviews, setReviews]           = useState([]);
+  const [reviewsLoading, setReviewsLoading] = useState(true);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [rvEmployeeId, setRvEmployeeId] = useState(currentUser.id);
+  const [rvPeriod, setRvPeriod]         = useState("");
+  const [rvScore, setRvScore]           = useState("");
+  const [rvFeedback, setRvFeedback]     = useState("");
+  const [rvStatus, setRvStatus]         = useState("pending");
+  const [rvDate, setRvDate]             = useState("");
+  const [rvSaving, setRvSaving]         = useState(false);
+
+
+  const [reviewTarget, setReviewTarget] = useState(currentUser.id);
+
   const visibleEmps = getVisibleEmps(currentUser);
   const quarter = currentQuarterLabel();
+  const canAddReview = canManage(currentUser) || currentUser.isHR;
 
   useEffect(() => {
-    setGoalsLoading(true);
     fetch(`${API_URL}/api/goals?employee_id=${currentUser.id}`)
       .then(r => r.json())
       .then(d => setGoals(d.goals || []))
       .catch(() => {})
       .finally(() => setGoalsLoading(false));
   }, [currentUser.id]);
+
+  const loadReviews = (empId) => {
+    fetch(`${API_URL}/api/perf/reviews/${empId}`)
+      .then(r => r.json())
+      .then(d => setReviews(d.reviews || []))
+      .catch(() => {})
+      .finally(() => setReviewsLoading(false));
+  };
+
+  useEffect(() => { loadReviews(reviewTarget); }, [reviewTarget]);
 
   const openGoalModal = () => {
     setGTitle(""); setGTarget(""); setGNotes(""); setGProgress(0); setGStatus("on-track"); setGIsKey(false);
@@ -3942,9 +3939,34 @@ const PerfMod = ({ currentUser }) => {
     try { await fetch(`${API_URL}/api/goals/${id}`, { method: "DELETE" }); } catch { /* ignore */ }
   };
 
+  const openReviewModal = () => {
+    setRvEmployeeId(currentUser.id); setRvPeriod(""); setRvScore("");
+    setRvFeedback(""); setRvStatus("pending"); setRvDate("");
+    setShowReviewModal(true);
+  };
+
+  const handleAddReview = async () => {
+    if (!rvPeriod.trim()) return;
+    setRvSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/perf/reviews`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employeeId: rvEmployeeId, reviewerId: currentUser.id, period: rvPeriod.trim(), score: rvScore ? parseFloat(rvScore) : null, feedback: rvFeedback.trim(), status: rvStatus, reviewDate: rvDate || null }),
+      });
+      const data = await res.json();
+      if (data.ok) { if (rvEmployeeId === reviewTarget) loadReviews(reviewTarget); setShowReviewModal(false); }
+    } catch { /* ignore */ } finally { setRvSaving(false); }
+  };
+
+  const handleDeleteReview = async (id) => {
+    if (!window.confirm("Delete this review?")) return;
+    setReviews(p => p.filter(r => r.id !== id));
+    try { await fetch(`${API_URL}/api/perf/reviews/${id}`, { method: "DELETE" }); } catch { /* ignore */ }
+  };
+
   return (
     <div>
-      <div className="ph"><div><div className="ph-eyebrow">People</div><div className="ph-title">Performance</div><div className="ph-sub">Goals, OKRs, review cycles and skill scores</div></div><button className="btn btn-p" onClick={openGoalModal}><Icon n="plus" s={13}/>Add Goal</button></div>
+      <div className="ph"><div><div className="ph-eyebrow">People</div><div className="ph-title">Performance</div><div className="ph-sub">Goals, OKRs and review cycles</div></div><button className="btn btn-p" onClick={openGoalModal}><Icon n="plus" s={13}/>Add Goal</button></div>
       <div className="sg">{[
         { v:currentUser.perf,l:"My Perf Score",s:"Last review",c:"#0F8C5A" },
         { v:goals.filter(g=>g.status==="on-track").length,l:"On Track",s:"Active goals",c:"#1B45F5" },
@@ -3958,10 +3980,42 @@ const PerfMod = ({ currentUser }) => {
           <div className="sc-sub">{s.s}</div>
         </div>
       ))}</div>
-      <div className="tabs">{["goals","reviews","skills",...(canManage(currentUser)?["team"]:[])].map(t=><div key={t} className={`tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>{t==="goals"?"My Goals":t==="reviews"?"Reviews":t==="skills"?"Skills":"Team"}</div>)}</div>
+      <div className="tabs">{["goals","reviews",...(canManage(currentUser)?["team"]:[])].map(t=><div key={t} className={`tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>{t==="goals"?"My Goals":t==="reviews"?"Reviews":"Team"}</div>)}</div>
       {tab==="goals"&&<div className="card"><div className="ch"><div className="ct"><Icon n="target" s={14}/>My Goals — {quarter}</div></div><div style={{ padding:0 }}>{goalsLoading?<div className="cb t3 tsm" style={{ textAlign:"center",padding:24 }}>Loading…</div>:goals.length===0?<div className="cb t3 tsm" style={{ textAlign:"center",padding:32 }}>No goals yet — click <strong>Add Goal</strong> to get started.</div>:goals.map((g)=>(<div key={g.id} style={{ padding:"12px 14px",borderBottom:"1px solid var(--brd)" }}><div style={{ display:"flex",alignItems:"flex-start",gap:10,marginBottom:6 }}><div style={{ flex:1 }}><div style={{ display:"flex",alignItems:"center",gap:7,marginBottom:2 }}><div className="fw7" style={{ fontSize:13 }}>{g.title}</div>{g.is_key&&<span className="bdg bdg-p" style={{ fontSize:9.5 }}>KEY</span>}</div>{(g.target||g.notes)&&<div className="t3 tsm">{g.target?"Target: "+g.target:""}{g.target&&g.notes?" · ":""}{g.notes}</div>}</div><span className={`bdg ${g.status==="on-track"?"bdg-g":"bdg-a"}`}>{g.status==="on-track"?"On Track":"At Risk"}</span><span style={{ fontFamily:"var(--mono)",fontWeight:750,color:g.progress>=75?"var(--green)":"var(--amber)",minWidth:38,textAlign:"right" }}>{g.progress}%</span><button className="btn btn-sm" style={{ padding:"3px 7px",color:"var(--red)",background:"var(--red-soft)",borderColor:"transparent" }} onClick={()=>handleDeleteGoal(g.id)}><Icon n="x" s={11}/></button></div><div className="pt" style={{ height:5 }}><div className="pf" style={{ width:`${g.progress}%`,background:g.status==="on-track"?"var(--green)":"var(--amber)" }}/></div></div>))}</div></div>}
-      {tab==="reviews"&&<div className="card"><div className="ch"><div className="ct"><Icon n="star" s={14}/>Review Cycles</div></div><div className="cb">{reviews.map((r,i)=>(<div key={i} className="review-card"><div style={{ display:"flex",alignItems:"center",gap:12 }}>{r.score?<div className="score-circle" style={{ background:r.score>=4.5?"var(--green-soft)":"var(--accent-soft)",color:r.score>=4.5?"var(--green)":"var(--accent)" }}>{r.score}</div>:<div className="score-circle" style={{ background:"var(--raised)",color:"var(--ink4)",fontSize:12 }}>TBD</div>}<div style={{ flex:1 }}><div style={{ display:"flex",gap:7,alignItems:"center",marginBottom:3 }}><div className="fw7" style={{ fontSize:13 }}>{r.period}</div>{r.status==="complete"?<span className="bdg bdg-g">Done</span>:<span className="bdg bdg-a">Upcoming</span>}</div><div className="t3 tsm">{r.manager} · {r.date}</div>{r.feedback&&<div style={{ fontSize:12,color:"var(--ink2)",marginTop:6,padding:"6px 10px",background:"var(--raised)",borderRadius:"var(--r8)",borderLeft:"2px solid var(--accent)" }}>{r.feedback}</div>}</div></div></div>))}</div></div>}
-      {tab==="skills"&&<div className="card"><div className="ch"><div className="ct"><Icon n="star" s={14}/>Competency Scores</div></div><div className="cb">{skills.map((sk,i)=>(<div className="lbar" key={i}><div style={{ minWidth:180 }}><div style={{ fontWeight:650,fontSize:13 }}>{sk.name}</div></div><div style={{ flex:1,margin:"0 12px" }} className="lbar-t"><div className="lbar-f" style={{ width:`${(sk.score/5)*100}%`,background:sk.score>=4.5?"var(--green)":sk.score>=4?"var(--accent)":"var(--amber)" }}/></div><div style={{ minWidth:50,textAlign:"right" }}><span style={{ fontFamily:"var(--mono)",fontWeight:750,fontSize:14,color:sk.score>=4.5?"var(--green)":sk.score>=4?"var(--accent)":"var(--amber)" }}>{sk.score}</span><span className="t3" style={{ fontSize:11 }}>/5</span></div></div>))}</div></div>}
+      {tab==="reviews"&&(
+        <div className="card">
+          <div className="ch">
+            <div className="ct"><Icon n="star" s={14}/>Review Cycles</div>
+            <div style={{ display:"flex",gap:8,alignItems:"center" }}>
+              {canAddReview && (
+                <select className="fsel" style={{ fontSize:12,height:30,padding:"0 8px" }} value={reviewTarget} onChange={e=>{ setReviewTarget(e.target.value); }}>
+                  {visibleEmps.map(e=><option key={e.id} value={e.id}>{e.name}{e.id===currentUser.id?" (You)":""}</option>)}
+                </select>
+              )}
+              {canAddReview && <button className="btn btn-p btn-sm" onClick={openReviewModal}><Icon n="plus" s={12}/>Add Review</button>}
+            </div>
+          </div>
+          <div className="cb">
+            {reviewsLoading ? <div className="t3 tsm" style={{ textAlign:"center",padding:24 }}>Loading…</div>
+            : reviews.length === 0 ? <div className="t3 tsm" style={{ textAlign:"center",padding:32 }}>No reviews yet{canAddReview ? " — click Add Review to create one." : "."}</div>
+            : reviews.map(r => (
+              <div key={r.id} className="review-card" style={{ display:"flex",alignItems:"flex-start",gap:12,padding:"12px 0",borderBottom:"1px solid var(--brd)" }}>
+                {r.score ? <div className="score-circle" style={{ background:r.score>=4.5?"var(--green-soft)":"var(--accent-soft)",color:r.score>=4.5?"var(--green)":"var(--accent)",flexShrink:0 }}>{r.score}</div>
+                : <div className="score-circle" style={{ background:"var(--raised)",color:"var(--ink4)",fontSize:12,flexShrink:0 }}>TBD</div>}
+                <div style={{ flex:1 }}>
+                  <div style={{ display:"flex",gap:7,alignItems:"center",marginBottom:3 }}>
+                    <div className="fw7" style={{ fontSize:13 }}>{r.period}</div>
+                    {r.status==="complete"?<span className="bdg bdg-g">Done</span>:<span className="bdg bdg-a">Pending</span>}
+                  </div>
+                  <div className="t3 tsm">{r.reviewer_id ? (ALL_USERS.find(e=>e.id===r.reviewer_id)?.name || r.reviewer_id) : "—"}{r.review_date ? " · "+r.review_date : ""}</div>
+                  {r.feedback && <div style={{ fontSize:12,color:"var(--ink2)",marginTop:6,padding:"6px 10px",background:"var(--raised)",borderRadius:"var(--r8)",borderLeft:"2px solid var(--accent)" }}>{r.feedback}</div>}
+                </div>
+                {canAddReview && <button className="btn btn-sm" style={{ color:"var(--red)",background:"var(--red-soft)",borderColor:"transparent",flexShrink:0 }} onClick={()=>handleDeleteReview(r.id)}><Icon n="x" s={11}/></button>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {tab==="team"&&canManage(currentUser)&&<div className="card"><div className="ch"><div className="ct"><Icon n="users" s={14}/>Team Performance</div></div><div className="tw"><table><thead><tr><th>Employee</th><th>Role</th><th>Score</th><th>Rating</th></tr></thead><tbody>{visibleEmps.filter(e=>e.id!==currentUser.id).map(e=><tr key={e.id}><td><div style={{ display:"flex",alignItems:"center",gap:8 }}><div className="avt" style={{ width:26,height:26,background:e.color }}>{e.firstName[0]}{e.lastName[0]}</div><div className="fw7">{e.name}</div></div></td><td className="t3 tsm">{e.role}</td><td><span style={{ fontFamily:"var(--mono)",fontWeight:750,color:e.perf>=4.5?"var(--green)":e.perf>=4?"var(--accent)":"var(--amber)" }}>{e.perf}</span></td><td><span className={`bdg ${e.perf>=4.5?"bdg-g":e.perf>=4?"bdg-b":"bdg-a"}`}>{e.perf>=4.5?"Excellent":e.perf>=4?"Good":"Needs Work"}</span></td></tr>)}</tbody></table></div></div>}
 
       {showGoalModal&&<Modal title="Add Goal" onClose={()=>setShowGoalModal(false)} footer={
@@ -3976,6 +4030,20 @@ const PerfMod = ({ currentUser }) => {
           <div className="ff" style={{ gridColumn:"1/-1" }}><label style={{ display:"flex",alignItems:"center",gap:8,cursor:"pointer" }}><input type="checkbox" checked={gIsKey} onChange={e=>setGIsKey(e.target.checked)} style={{ accentColor:"var(--accent)",width:15,height:15 }}/><span className="flbl" style={{ margin:0,letterSpacing:0,textTransform:"none",fontSize:13,fontWeight:600 }}>Mark as Key Result</span></label></div>
         </div>
       </Modal>}
+
+      {showReviewModal&&<Modal title="Add Performance Review" onClose={()=>setShowReviewModal(false)} footer={
+        <><button className="btn btn-ghost" onClick={()=>setShowReviewModal(false)}>Cancel</button><button className="btn btn-p" onClick={handleAddReview} disabled={!rvPeriod.trim()||rvSaving}>{rvSaving?"Saving…":"Add Review"}</button></>
+      }>
+        <div className="fg">
+          {canAddReview&&<div className="ff" style={{ gridColumn:"1/-1" }}><label className="flbl">Employee *</label><select className="fsel" value={rvEmployeeId} onChange={e=>setRvEmployeeId(e.target.value)}>{visibleEmps.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}</select></div>}
+          <div className="ff"><label className="flbl">Period *</label><input className="finp" placeholder="e.g. Q2 2026 or Annual 2025" value={rvPeriod} onChange={e=>setRvPeriod(e.target.value)}/></div>
+          <div className="ff"><label className="flbl">Status</label><select className="fsel" value={rvStatus} onChange={e=>setRvStatus(e.target.value)}><option value="pending">Pending</option><option value="complete">Complete</option></select></div>
+          <div className="ff"><label className="flbl">Score (1–5)</label><input className="finp" type="number" min="1" max="5" step="0.1" placeholder="Leave blank if TBD" value={rvScore} onChange={e=>setRvScore(e.target.value)}/></div>
+          <div className="ff"><label className="flbl">Review Date</label><input className="finp" type="date" value={rvDate} onChange={e=>setRvDate(e.target.value)}/></div>
+          <div className="ff" style={{ gridColumn:"1/-1" }}><label className="flbl">Feedback</label><textarea className="ftxt" rows={3} placeholder="Write your review comments here…" value={rvFeedback} onChange={e=>setRvFeedback(e.target.value)}/></div>
+        </div>
+      </Modal>}
+
     </div>
   );
 };
@@ -4111,42 +4179,36 @@ const DocsMod = ({ currentUser }) => {
       </div>
 
       {showUpload && (
-        <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center" }}>
-          <div style={{ background:"var(--surface)",borderRadius:"var(--r16)",padding:"28px",width:420,boxShadow:"var(--shadow-xl)" }}>
-            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
-              <div style={{ fontWeight:700, fontSize:16 }}>Upload Document</div>
-              <button className="btn btn-sm" onClick={() => setShowUpload(false)}>✕</button>
+        <Modal title="Upload Document" onClose={() => { setShowUpload(false); setUpFile(null); setUpDesc(""); }}
+          footer={<>
+            <button className="btn btn-ghost" onClick={() => { setShowUpload(false); setUpFile(null); setUpDesc(""); }}>Cancel</button>
+            <button className="btn btn-p" onClick={handleUpload} disabled={saving || !upFile}>{saving ? "Uploading…" : "Upload"}</button>
+          </>}>
+          <div className="fg">
+            <div className="ff" style={{ gridColumn:"1/-1" }}>
+              <label className="flbl">File *</label>
+              <input type="file" onChange={e => setUpFile(e.target.files[0])} style={{ width:"100%", padding:"7px 10px", border:"1px solid var(--brd2)", borderRadius:"var(--r8)", fontSize:13, background:"var(--surface)", boxSizing:"border-box" }}/>
             </div>
-            <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-              <div>
-                <div className="t3 tsm" style={{ marginBottom:4 }}>File *</div>
-                <input type="file" onChange={e => setUpFile(e.target.files[0])} style={{ width:"100%",padding:"8px",border:"1px solid var(--brd2)",borderRadius:"var(--r8)",fontSize:13 }}/>
-              </div>
-              <div>
-                <div className="t3 tsm" style={{ marginBottom:4 }}>Category</div>
-                <select value={upCat} onChange={e => setUpCat(e.target.value)} style={{ width:"100%",padding:"8px 10px",border:"1px solid var(--brd2)",borderRadius:"var(--r8)",fontSize:13,background:"var(--surface)" }}>
-                  {DOC_CATS.map(c => <option key={c} value={c}>{c}</option>)}
+            <div className="ff">
+              <label className="flbl">Category</label>
+              <select className="fsel" value={upCat} onChange={e => setUpCat(e.target.value)}>
+                {DOC_CATS.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            {canManage && (
+              <div className="ff">
+                <label className="flbl">Employee</label>
+                <select className="fsel" value={upEmpId} onChange={e => setUpEmpId(e.target.value)}>
+                  {ALL_USERS.map(u => <option key={u.id} value={u.id}>{u.name} ({u.id})</option>)}
                 </select>
               </div>
-              {canManage && (
-                <div>
-                  <div className="t3 tsm" style={{ marginBottom:4 }}>Employee</div>
-                  <select value={upEmpId} onChange={e => setUpEmpId(e.target.value)} style={{ width:"100%",padding:"8px 10px",border:"1px solid var(--brd2)",borderRadius:"var(--r8)",fontSize:13,background:"var(--surface)" }}>
-                    {ALL_USERS.map(u => <option key={u.id} value={u.id}>{u.name} ({u.id})</option>)}
-                  </select>
-                </div>
-              )}
-              <div>
-                <div className="t3 tsm" style={{ marginBottom:4 }}>Description (optional)</div>
-                <input type="text" value={upDesc} onChange={e => setUpDesc(e.target.value)} placeholder="e.g. Offer letter — joining date 1 Jan 2025" style={{ width:"100%",padding:"8px 10px",border:"1px solid var(--brd2)",borderRadius:"var(--r8)",fontSize:13 }}/>
-              </div>
-              <div style={{ display:"flex",gap:8,justifyContent:"flex-end",marginTop:4 }}>
-                <button className="btn" onClick={() => setShowUpload(false)}>Cancel</button>
-                <button className="btn btn-p" onClick={handleUpload} disabled={saving}>{saving ? "Uploading…" : "Upload"}</button>
-              </div>
+            )}
+            <div className="ff" style={{ gridColumn:"1/-1" }}>
+              <label className="flbl">Description (optional)</label>
+              <input className="finp" type="text" value={upDesc} onChange={e => setUpDesc(e.target.value)} placeholder="e.g. Offer letter — joining date 1 Jan 2025"/>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );
@@ -4485,6 +4547,89 @@ export default function AppBootstrap() {
   return <HRApp />;
 }
 
+// ForceChangePassword — blocks access to the app until the seeded password is replaced.
+// Shown automatically when currentUser.mustChangePassword is true.
+const ForceChangePassword = ({ currentUser, onChanged }) => {
+  const [cur, setCur] = useState("");
+  const [nw, setNw] = useState("");
+  const [conf, setConf] = useState("");
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const validate = (pw) => {
+    if (pw.length < 8) return "Password must be at least 8 characters.";
+    if (!/\d/.test(pw)) return "Password must include at least one number.";
+    if (!/[^a-zA-Z0-9]/.test(pw)) return "Password must include at least one special character.";
+    return null;
+  };
+
+  const handleSubmit = async () => {
+    if (!cur || !nw || !conf) { setErr("All fields are required."); return; }
+    const pwErr = validate(nw);
+    if (pwErr) { setErr(pwErr); return; }
+    if (nw !== conf) { setErr("Passwords do not match."); return; }
+    setLoading(true); setErr("");
+    try {
+      const res = await fetch(`${API_URL}/api/auth/change-password`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employeeId: currentUser.id, currentPassword: cur, newPassword: nw }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setErr(data.detail || "Failed to change password."); return; }
+      setMsg("Password set successfully! Taking you in…");
+      setTimeout(() => onChanged({ ...currentUser, mustChangePassword: false }), 1200);
+    } catch { setErr("Cannot reach server."); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"linear-gradient(135deg,#0f172a 0%,#1e1b4b 40%,#1e3a8a 100%)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"Inter,'Plus Jakarta Sans',sans-serif" }}>
+      <div style={{ background:"var(--surface)", borderRadius:16, width:420, maxWidth:"94vw", boxShadow:"0 24px 64px rgba(0,0,0,0.35)", overflow:"hidden" }}>
+        <div style={{ background:"var(--ink)", padding:"20px 24px" }}>
+          <div style={{ color:"#fff", fontWeight:800, fontSize:16 }}>Set Your Password</div>
+          <div style={{ color:"rgba(255,255,255,0.45)", fontSize:12, marginTop:3 }}>
+            {currentUser.name} · First login — choose a secure password
+          </div>
+        </div>
+        <div style={{ padding:"24px" }}>
+          {msg ? (
+            <div style={{ textAlign:"center" }}>
+              <div style={{ width:52, height:52, borderRadius:"50%", background:"var(--green-soft)", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px", fontSize:24, color:"var(--green)" }}>✓</div>
+              <div style={{ fontWeight:700, fontSize:15 }}>{msg}</div>
+            </div>
+          ) : (
+            <>
+              <p style={{ fontSize:13, color:"var(--ink3)", marginBottom:18, lineHeight:1.6 }}>
+                Your account was created with a temporary password. You must set a personal password before continuing.
+              </p>
+              <div style={{ background:"var(--accent-soft)", border:"1px solid rgba(27,69,245,0.2)", borderRadius:8, padding:"9px 12px", fontSize:12, color:"var(--accent)", marginBottom:18 }}>
+                Requirements: at least 8 characters · one number · one special character
+              </div>
+              <div className="fgrp" style={{ marginBottom:13 }}>
+                <div className="flbl">Temporary Password</div>
+                <input className="finp" type="password" placeholder="Enter the password you received" value={cur} onChange={e => { setCur(e.target.value); setErr(""); }}/>
+              </div>
+              <div className="fgrp" style={{ marginBottom:13 }}>
+                <div className="flbl">New Password</div>
+                <input className="finp" type="password" placeholder="Min 8 chars, 1 number, 1 special char" value={nw} onChange={e => { setNw(e.target.value); setErr(""); }}/>
+              </div>
+              <div className="fgrp" style={{ marginBottom: err ? 10 : 20 }}>
+                <div className="flbl">Confirm New Password</div>
+                <input className="finp" type="password" placeholder="Re-enter new password" value={conf} onChange={e => { setConf(e.target.value); setErr(""); }} onKeyDown={e => e.key === "Enter" && handleSubmit()}/>
+              </div>
+              {err && <div style={{ background:"var(--red-soft)", border:"1px solid rgba(220,38,38,0.2)", borderRadius:8, padding:"8px 12px", fontSize:12.5, color:"var(--red)", fontWeight:600, marginBottom:14 }}>{err}</div>}
+              <button className="btn btn-p" style={{ width:"100%", padding:"11px", fontSize:14, fontWeight:700 }} onClick={handleSubmit} disabled={loading}>
+                {loading ? "Saving…" : "Set Password & Continue →"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // HRApp is the authenticated app shell — only rendered after login succeeds.
 // It owns the `currentUser` session and the active `page` ID, both of which
 // are passed down as props to every module component.
@@ -4494,33 +4639,33 @@ function HRApp() {
     catch { return null; }
   });
   const [page, setPage] = useState(() => localStorage.getItem("doloxe_page") || "dir");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // Security Settings modal state (Change Password + Recovery Email tabs)
+  // Security Settings modal state (Change Password)
   const [cpOpen, setCpOpen] = useState(false);
-  const [cpTab, setCpTab] = useState("password"); // "password" | "recovery"
-  // Change password fields
   const [cpCurrent, setCpCurrent] = useState("");
   const [cpNew, setCpNew] = useState("");
   const [cpConfirm, setCpConfirm] = useState("");
   const [cpErr, setCpErr] = useState("");
   const [cpMsg, setCpMsg] = useState("");
   const [cpLoading, setCpLoading] = useState(false);
-  // Recovery email fields
-  const [rePassword, setRePassword] = useState(""); // current password to verify identity
-  const [reEmail, setReEmail] = useState("");
-  const [reErr, setReErr] = useState("");
-  const [reMsg, setReMsg] = useState("");
-  const [reLoading, setReLoading] = useState(false);
 
   const resetCp = () => {
-    setCpOpen(false); setCpTab("password");
+    setCpOpen(false);
     setCpCurrent(""); setCpNew(""); setCpConfirm(""); setCpErr(""); setCpMsg("");
-    setRePassword(""); setReEmail(""); setReErr(""); setReMsg("");
+  };
+
+  const validateNewPassword = (pw) => {
+    if (pw.length < 8) return "Password must be at least 8 characters.";
+    if (!/\d/.test(pw)) return "Password must include at least one number.";
+    if (!/[^a-zA-Z0-9]/.test(pw)) return "Password must include at least one special character.";
+    return null;
   };
 
   const submitChangePassword = async () => {
     if (!cpCurrent || !cpNew || !cpConfirm) { setCpErr("All fields are required."); return; }
-    if (cpNew.length < 6) { setCpErr("New password must be at least 6 characters."); return; }
+    const pwErr = validateNewPassword(cpNew);
+    if (pwErr) { setCpErr(pwErr); return; }
     if (cpNew !== cpConfirm) { setCpErr("New passwords do not match."); return; }
     setCpLoading(true); setCpErr("");
     try {
@@ -4535,25 +4680,6 @@ function HRApp() {
     } catch { setCpErr("Cannot reach server."); }
     finally { setCpLoading(false); }
   };
-
-  const submitRecoveryEmail = async () => {
-    if (!rePassword) { setReErr("Enter your current password to confirm."); return; }
-    if (!reEmail.trim()) { setReErr("Enter a recovery email address."); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(reEmail.trim())) { setReErr("Enter a valid email address."); return; }
-    setReLoading(true); setReErr("");
-    try {
-      const res = await fetch(`${API_URL}/api/auth/recovery-email`, {
-        method:"PUT", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ employeeId: currentUser.id, currentPassword: rePassword, recoveryEmail: reEmail.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setReErr(data.detail || "Failed to save recovery email."); return; }
-      setReMsg(`Recovery email saved: ${data.maskedEmail}`);
-      setRePassword(""); setReEmail("");
-    } catch { setReErr("Cannot reach server."); }
-    finally { setReLoading(false); }
-  };
-
 
   // ── Notifications ──────────────────────────────────────────────────────────
   const canReceiveNotifs = currentUser?.isHR || currentUser?.accessLevel >= 4;
@@ -4633,6 +4759,11 @@ function HRApp() {
   // Gate the whole app behind login: if no session, render the login screen.
   if (!currentUser) return (<><GS/><LoginScreen onLogin={u => { localStorage.setItem("doloxe_user", JSON.stringify(u)); setCurrentUser(u); setPage("dir"); }}/></>);
 
+  // Force password change on first login before accessing any part of the app.
+  if (currentUser.mustChangePassword) return (
+    <><GS/><ForceChangePassword currentUser={currentUser} onChanged={u => { localStorage.setItem("doloxe_user", JSON.stringify(u)); setCurrentUser(u); }}/></>
+  );
+
   // Filter the page list to only those the current user's access level permits.
   const visiblePages = PAGES.filter(p => currentUser.accessLevel >= p.minLevel);
   // Derive sidebar section groups in the order they appear in PAGES (preserves order).
@@ -4663,6 +4794,9 @@ function HRApp() {
         {/* TOPBAR */}
         <div className="topbar">
           <div className="tb-brand">
+            <button className="tb-hamburger" onClick={() => setSidebarOpen(o => !o)} aria-label="Toggle menu">
+              <span/><span/><span/>
+            </button>
             <div style={{ width:28, height:28, borderRadius:7, background:"var(--ink)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
             </div>
@@ -4729,13 +4863,16 @@ function HRApp() {
               </div>
             </div>
             <button className="btn btn-sm" style={{ color:"var(--red)", borderColor:"rgba(200,49,42,0.2)", background:"var(--red-soft)", gap:5, fontWeight:650 }} onClick={()=>{ localStorage.removeItem("doloxe_user"); setCurrentUser(null); }}>
-              <Icon n="logout" s={12}/><span>Sign Out</span>
+              <Icon n="logout" s={12}/><span className="sign-out-label">Sign Out</span>
             </button>
           </div>
         </div>
 
+        {/* Sidebar overlay — tapping it closes the sidebar on mobile */}
+        <div className={`sb-overlay${sidebarOpen ? " visible" : ""}`} onClick={() => setSidebarOpen(false)}/>
+
         {/* SIDEBAR */}
-        <div className="sidebar">
+        <div className={`sidebar${sidebarOpen ? " open" : ""}`}>
           <div className="sb-user-card">
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6, position:"relative", zIndex:1 }}>
               <div className="avt" style={{ width:30, height:30, fontSize:10, background:"rgba(255,255,255,0.2)" }}>{currentUser.firstName[0]}{currentUser.lastName[0]}</div>
@@ -4751,7 +4888,7 @@ function HRApp() {
             <div key={grp}>
               <div className="sb-section-label">{grp}</div>
               {visiblePages.filter(p => p.grp === grp).map(p => (
-                <div key={p.id} className={`sb-item${page===p.id?" active":""}`} onClick={()=>{ localStorage.setItem("doloxe_page", p.id); setPage(p.id); }}>
+                <div key={p.id} className={`sb-item${page===p.id?" active":""}`} onClick={()=>{ localStorage.setItem("doloxe_page", p.id); setPage(p.id); setSidebarOpen(false); }}>
                   <Icon n={p.i} s={14}/>
                   <span style={{ flex:1 }}>{p.l}</span>
                 </div>
@@ -4784,19 +4921,7 @@ function HRApp() {
               <button onClick={resetCp} style={{ background:"rgba(255,255,255,0.1)", border:"none", color:"#fff", width:28, height:28, borderRadius:8, cursor:"pointer", fontSize:14, display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
             </div>
 
-            {/* Tabs */}
-            <div style={{ display:"flex", borderBottom:"1px solid var(--brd)", background:"var(--raised)" }}>
-              {[["password","🔑 Change Password"],["recovery","📧 Recovery Email"]].map(([id, label]) => (
-                <div key={id} onClick={() => { setCpTab(id); setCpErr(""); setCpMsg(""); setReErr(""); setReMsg(""); }}
-                  style={{ padding:"10px 18px", fontSize:13, fontWeight:600, cursor:"pointer", borderBottom: cpTab===id ? "2.5px solid var(--accent)" : "2.5px solid transparent", color: cpTab===id ? "var(--accent)" : "var(--ink3)", background: cpTab===id ? "var(--accent-soft)" : "transparent", transition:"all 0.12s" }}>
-                  {label}
-                </div>
-              ))}
-            </div>
-
-            {/* Change Password tab */}
-            {cpTab === "password" && (
-              <div style={{ padding:"24px 22px" }}>
+            <div style={{ padding:"24px 22px" }}>
                 {cpMsg ? (
                   <div style={{ textAlign:"center" }}>
                     <div style={{ width:52, height:52, borderRadius:"50%", background:"var(--green-soft)", border:"2px solid rgba(5,150,105,0.3)", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px", fontSize:22, color:"var(--green)" }}>✓</div>
@@ -4812,7 +4937,7 @@ function HRApp() {
                     </div>
                     <div className="fgrp" style={{ marginBottom:14 }}>
                       <div className="flbl">New Password</div>
-                      <input className="finp" type="password" placeholder="Min 6 characters" value={cpNew} onChange={e => { setCpNew(e.target.value); setCpErr(""); }}/>
+                      <input className="finp" type="password" placeholder="Min 8 chars, 1 number, 1 special char" value={cpNew} onChange={e => { setCpNew(e.target.value); setCpErr(""); }}/>
                     </div>
                     <div className="fgrp" style={{ marginBottom:cpErr ? 10 : 20 }}>
                       <div className="flbl">Confirm New Password</div>
@@ -4825,45 +4950,7 @@ function HRApp() {
                     </div>
                   </>
                 )}
-              </div>
-            )}
-
-            {/* Recovery Email tab */}
-            {cpTab === "recovery" && (
-              <div style={{ padding:"24px 22px" }}>
-                {reMsg ? (
-                  <div style={{ textAlign:"center" }}>
-                    <div style={{ width:52, height:52, borderRadius:"50%", background:"var(--green-soft)", border:"2px solid rgba(5,150,105,0.3)", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 16px", fontSize:22, color:"var(--green)" }}>✓</div>
-                    <div style={{ fontWeight:800, fontSize:15, color:"var(--ink)", marginBottom:8 }}>Recovery Email Saved</div>
-                    <p style={{ fontSize:13, color:"var(--ink3)", marginBottom:20 }}>{reMsg}</p>
-                    <p style={{ fontSize:12, color:"var(--ink4)", marginBottom:20 }}>This email will receive OTPs when you use "Forgot Password" on the login page.</p>
-                    <button onClick={() => { setReMsg(""); }} style={{ padding:"10px 24px", borderRadius:10, border:"none", background:"var(--accent)", color:"#fff", fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>Done</button>
-                  </div>
-                ) : (
-                  <>
-                    <p style={{ fontSize:13, color:"var(--ink3)", marginBottom:18, lineHeight:1.65 }}>
-                      Set a <strong>real email</strong> (Gmail or any working inbox) that you own. This is the only address that will ever receive password reset OTPs — it cannot be changed by anyone but you.
-                    </p>
-                    <div className="fgrp" style={{ marginBottom:14 }}>
-                      <div className="flbl">Current Password (to verify it's you)</div>
-                      <input className="finp" type="password" placeholder="Enter current password" value={rePassword} onChange={e => { setRePassword(e.target.value); setReErr(""); }}/>
-                    </div>
-                    <div className="fgrp" style={{ marginBottom:reErr ? 10 : 20 }}>
-                      <div className="flbl">Recovery Email</div>
-                      <input className="finp" type="email" placeholder="you@gmail.com" value={reEmail} onChange={e => { setReEmail(e.target.value); setReErr(""); }} onKeyDown={e => e.key === "Enter" && submitRecoveryEmail()}/>
-                    </div>
-                    {reErr && <div style={{ background:"var(--red-soft)", border:"1px solid rgba(220,38,38,0.2)", borderRadius:8, padding:"8px 12px", fontSize:12.5, color:"var(--red)", fontWeight:600, marginBottom:14 }}>{reErr}</div>}
-                    <div style={{ background:"var(--amber-soft)", border:"1px solid rgba(176,96,16,0.2)", borderRadius:8, padding:"9px 12px", fontSize:12, color:"var(--amber)", marginBottom:16 }}>
-                      Your current password is required to prevent someone else from changing your recovery email.
-                    </div>
-                    <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
-                      <button className="btn" onClick={resetCp}>Cancel</button>
-                      <button className="btn btn-p" onClick={submitRecoveryEmail} disabled={reLoading}>{reLoading ? "Saving…" : "Save Recovery Email"}</button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
+            </div>
 
           </div>
         </div>

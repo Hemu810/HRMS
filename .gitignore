@@ -6,6 +6,12 @@
 # SQLite dev database
 backend/*.db
 
+# Python bytecode — never commit, differs per Python version
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
 # Logs
 logs
 *.log
