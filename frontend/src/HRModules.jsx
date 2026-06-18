@@ -419,7 +419,7 @@ const GS = () => (
     .mono { font-family: var(--mono); }
     .tw   { overflow-x: auto; overscroll-behavior: none; }
 
-    /* Leave / skill balance bar */
+    /* Leave balance bar */
     .lbar {
       display: flex; align-items: center; justify-content: space-between;
       padding: 12px 14px; background: var(--paper);
@@ -527,7 +527,7 @@ const GS = () => (
     .att-late    { background: var(--amber-soft);  color: var(--amber);  border-color: rgba(217,119,6,0.22); }
     .att-leave   { background: var(--accent-soft); color: var(--accent); border-color: rgba(37,99,235,0.22); }
     .att-holiday { background: var(--purple-soft); color: var(--purple); border-color: rgba(124,58,237,0.22); }
-    .att-wknd    { background: transparent; color: var(--ink5); }
+    .att-wknd    { background: var(--raised); color: var(--ink4); border-color: var(--brd); }
     .att-today   { outline: 2.5px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 5px rgba(37,99,235,0.08); }
     .att-future  { background: transparent; color: var(--ink5); border-color: var(--brd); }
     .att-grid    { display: grid; grid-template-columns: repeat(7,1fr); gap: 5px; }
@@ -681,13 +681,34 @@ const GS = () => (
       .sc { padding: 14px 14px 12px; }
       .sg { gap: 8px; margin-bottom: 16px; }
       .card { border-radius: var(--r10); margin-bottom: 12px; }
-      .ch { padding: 12px 14px; }
+      .ch { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
       .cb { padding: 12px 14px; }
       .btn { font-size: 12px; padding: 5px 10px; }
       .btn-sm { padding: 3px 8px; font-size: 11px; }
       .tb-uname { font-size: 11.5px; }
       .tb-urole { display: none; }
       .sign-out-label { display: none; }
+      .g4 { grid-template-columns: 1fr 1fr; }
+      .g5 { grid-template-columns: 1fr 1fr; }
+      .week-bar { flex-wrap: wrap; gap: 10px; }
+    }
+
+    /* ── EXTRA RESPONSIVE GRID UTILITIES ─────────────────────────────────── */
+    /* These complement .g2 (already defined above) for 3/4/5-col patterns   */
+    /* and .dir-pane for the documents two-pane directory layout.            */
+    .g3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .g4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; }
+    .g5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+    .dir-pane { display: grid; grid-template-columns: 220px 1fr; gap: 14px; align-items: start; }
+
+    @media (max-width: 768px) {
+      .g4 { grid-template-columns: 1fr 1fr; }
+      .g5 { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); }
+      .dir-pane { grid-template-columns: 1fr; }
+      /* Notif panel: prevent overflow beyond viewport on narrow screens */
+      .notif-panel { max-width: calc(100vw - 20px) !important; }
+      /* Week bar wraps instead of overflowing */
+      .week-bar { flex-wrap: wrap; }
     }
   `}</style>
 );
@@ -756,6 +777,27 @@ const Modal = ({ title, onClose, children, footer, wide }) => createPortal(
 // localhost:4000 for local development.
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
+// JWT token helpers — stored in localStorage so they survive page reloads.
+const _TOKEN_KEY = "hrms_jwt";
+const getToken   = () => localStorage.getItem(_TOKEN_KEY) || "";
+const saveToken  = (t) => localStorage.setItem(_TOKEN_KEY, t);
+const clearToken = () => localStorage.removeItem(_TOKEN_KEY);
+
+// Drop-in replacement for apiFetch() that injects Authorization: Bearer <token>.
+// FormData bodies skip Content-Type so the browser can set the multipart boundary.
+const apiFetch = (url, opts = {}) => {
+  const token = getToken();
+  const isForm = opts.body instanceof FormData;
+  return fetch(url, {
+    ...opts,
+    headers: {
+      ...(isForm ? {} : { "Content-Type": "application/json" }),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts.headers || {}),
+    },
+  });
+};
+
 // These three globals are populated once by AppBootstrap on first render.
 // Using module-level lets (not React state) avoids prop-drilling them through
 // every component — they're effectively read-only after the bootstrap phase.
@@ -774,7 +816,7 @@ let APP_STATUTORY_CFG   = window.__HR_APP_STATUTORY_CFG__   || null;  // DB-driv
 // All other employees          → approved by any HR Manager (isHR && accessLevel >= 3)
 
 const isDirector    = (emp) => emp?.accessLevel >= 4;
-const isHRManager   = (emp) => emp?.isHR && emp?.accessLevel >= 3;
+const isHRManager   = (emp) => emp?.accessLevel >= 4 || emp?.isHR;
 
 const getLeaveApproverRole = (empId) => {
   const emp = ALL_USERS.find(e => e.id === empId);
@@ -958,7 +1000,7 @@ const LoginScreen = ({ onLogin }) => {
     if (!fpEmail.trim()) { setFpErr("Enter your company email."); return; }
     setFpLoading(true); setFpErr("");
     try {
-      const res = await fetch(`${API_URL}/api/auth/forgot-password`, {
+      const res = await apiFetch(`${API_URL}/api/auth/forgot-password`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountEmail: fpEmail.trim() }),
       });
@@ -979,7 +1021,7 @@ const LoginScreen = ({ onLogin }) => {
     if (fpNewPass !== fpConfirm) { setFpErr("Passwords do not match."); return; }
     setFpLoading(true); setFpErr("");
     try {
-      const res = await fetch(`${API_URL}/api/auth/reset-password`, {
+      const res = await apiFetch(`${API_URL}/api/auth/reset-password`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountEmail: fpEmail.trim(), otp: fpOtp.trim(), newPassword: fpNewPass }),
       });
@@ -997,8 +1039,8 @@ const LoginScreen = ({ onLogin }) => {
     if (!email || !pass) { setErr("Enter email and password."); return; }
     setLoading(true); setErr("");
     try {
-      const res = await fetch(`${API_URL}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password: pass }) });
-      if (res.ok) { const { user } = await res.json(); onLogin(user); } else { setErr("Invalid email or password."); }
+      const res = await apiFetch(`${API_URL}/api/auth/login`, { method: "POST", body: JSON.stringify({ email, password: pass }) });
+      if (res.ok) { const { user, token } = await res.json(); saveToken(token); onLogin(user); } else { setErr("Invalid email or password."); }
     } catch { setErr("Cannot reach server. Please try again."); }
     finally { setLoading(false); }
   };
@@ -1211,6 +1253,8 @@ const LoginScreen = ({ onLogin }) => {
 const AttendanceMod = ({ currentUser }) => {
   // Attendance map keyed by empId → { [YYYY-MM-DD]: "present"|"late"|"absent"|"leave"|"holiday"|"weekend" }
   const [attendance, setAttendance] = useState({});
+  // Clock detail records keyed by empId → { [YYYY-MM-DD]: { clock_in, clock_out, hours_worked } }
+  const [clockRecords, setClockRecords] = useState({});
   // Active tab: "my" | "calendar" | "corrections" | "team" | "reports"
   const [tab, setTab] = useState("my");
   // Month currently displayed in the stats and calendar views ("YYYY-MM").
@@ -1219,7 +1263,9 @@ const AttendanceMod = ({ currentUser }) => {
   const [checkedIn, setCheckedIn] = useState(false);
   const [checkInTime, setCheckInTime] = useState(null);
   const [checkOutTime, setCheckOutTime] = useState(null);
+  const [timeLogs, setTimeLogs] = useState([]);
   const checkInDateRef = useRef(null);
+  const clockBusyRef = useRef(false);
   // Employee selected in the calendar "team view" picker (defaults to self).
   const [selEmpId, setSelEmpId] = useState(currentUser.id);
   // Status filter for the Team Today tab.
@@ -1237,10 +1283,18 @@ const AttendanceMod = ({ currentUser }) => {
   const [corrSaving, setCorrSaving] = useState(false);
   // Dynamic month list for Reports dropdown — built from actual DB date range
   const [rptMonths, setRptMonths] = useState([CURRENT_MONTH_KEY]);
+  // Company holidays for the selected year
+  const [holidays, setHolidays] = useState([]);
+  const [holidaysLoading, setHolidaysLoading] = useState(true);
+  // Holiday form state
+  const [holModal, setHolModal] = useState(false);
+  const [holForm, setHolForm] = useState({ date:"", name:"" });
+  const [holError, setHolError] = useState("");
+  const [holSaving, setHolSaving] = useState(false);
 
   const canViewTeam = hasTeamReports(currentUser) || canViewAttendanceReports(currentUser);
   const canViewReports = canViewAttendanceReports(currentUser);
-  const canApproveAttendance = currentUser.isHR;
+  const canApproveAttendance = currentUser.isHR || isDirector(currentUser);
   const teamEmps = canViewAttendanceReports(currentUser) ? ALL_USERS : (canViewTeam ? getTeamEmps(currentUser) : [currentUser]);
   const calendarEmps = canViewReports ? ALL_USERS : teamEmps;
   const myAtt = attendance[currentUser.id] || {};
@@ -1250,22 +1304,89 @@ const AttendanceMod = ({ currentUser }) => {
   const fd  = new Date(yr, mo-1, 1).getDay();
   const todayStr = TODAY_STR;
 
+  const parseTodayClock = (timeText) => {
+    if (!timeText) return null;
+    const match = String(timeText).trim().match(/^(\d{1,2}):(\d{2})\s*([ap]m)?$/i);
+    if (!match) return null;
+    let hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    const meridiem = match[3]?.toLowerCase();
+    if (meridiem === "pm" && hours < 12) hours += 12;
+    if (meridiem === "am" && hours === 12) hours = 0;
+    const parsed = new Date();
+    parsed.setHours(hours, minutes, 0, 0);
+    return parsed;
+  };
+  const clockGapMinutes = (startText, endText) => {
+    const start = parseTodayClock(startText);
+    const end = parseTodayClock(endText);
+    return start && end ? (end - start) / 60000 : null;
+  };
+  const parseSessionLogs = (notes) => {
+    if (!notes) return [];
+    try {
+      const data = typeof notes === "string" ? JSON.parse(notes) : notes;
+      return Array.isArray(data.sessions) ? data.sessions : [];
+    } catch { return []; }
+  };
+  const sumSessionHours = (sessions) => sessions.reduce((total, session) => {
+    const start = parseTodayClock(session.in);
+    const end = parseTodayClock(session.out);
+    if (!start || !end) return total;
+    const minutes = (end - start) / 60000;
+    return total + (minutes < 0 ? minutes + 1440 : minutes) / 60;
+  }, 0);
+  const fmtHours = (hours) => {
+    if (!hours) return "—";
+    const mins = Math.round(hours * 60);
+    return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+  };
+
   // Load attendance for current user (and team if applicable) when month changes
   useEffect(() => {
     const empIds = canViewReports ? ALL_USERS.map(e => e.id) : (canViewTeam ? getTeamEmpIds(currentUser) : [currentUser.id]);
     Promise.all(empIds.map(id =>
-      fetch(`${API_URL}/api/attendance/${id}?year=${yr}&month=${mo}`)
+      apiFetch(`${API_URL}/api/attendance/${id}?year=${yr}&month=${mo}`)
         .then(r => r.json())
         .then(data => ({ id, records: data.attendance || [] }))
         .catch(() => ({ id, records: [] }))
     )).then(results => {
       const map = {};
+      const clocks = {};
       results.forEach(({ id, records }) => {
         const byDate = {};
-        records.forEach(rec => { byDate[rec.date] = rec.status; });
+        const byDateClock = {};
+        records.forEach(rec => {
+          byDate[rec.date] = rec.status;
+          if (rec.clock_in || rec.clock_out || rec.hours_worked) {
+            byDateClock[rec.date] = { clock_in: rec.clock_in, clock_out: rec.clock_out, hours_worked: rec.hours_worked };
+          }
+        });
         map[id] = byDate;
+        clocks[id] = byDateClock;
       });
+      const myToday = results.find(r => r.id === currentUser.id)?.records.find(rec => rec.date === todayStr);
+      if (myToday) {
+        const savedIn = myToday.clock_in || myToday.clockIn || null;
+        const savedOut = myToday.clock_out || myToday.clockOut || null;
+        const parsedLogs = parseSessionLogs(myToday.notes);
+        const savedLogs = parsedLogs.length ? parsedLogs : (savedIn ? [{ in:savedIn, out:savedOut || null }] : []);
+        const openLog = savedLogs.find(s => s.in && !s.out);
+        const accidentalOut = savedLogs.length === 0 && savedIn && savedOut && (clockGapMinutes(savedIn, savedOut) ?? Infinity) < 2;
+        setTimeLogs(savedLogs);
+        setCheckInTime(openLog?.in || savedIn);
+        setCheckOutTime(openLog || accidentalOut ? null : savedOut);
+        setCheckedIn(Boolean(openLog || (savedIn && (!savedOut || accidentalOut))));
+        checkInDateRef.current = openLog ? parseTodayClock(openLog.in) : (savedIn && (!savedOut || accidentalOut) ? parseTodayClock(savedIn) : null);
+      } else if (selMonth === CURRENT_MONTH_KEY) {
+        setTimeLogs([]);
+        setCheckInTime(null);
+        setCheckOutTime(null);
+        setCheckedIn(false);
+        checkInDateRef.current = null;
+      }
       setAttendance(prev => ({ ...prev, ...map }));
+      setClockRecords(prev => ({ ...prev, ...clocks }));
     });
   }, [selMonth]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1274,7 +1395,7 @@ const AttendanceMod = ({ currentUser }) => {
     const url = canApproveAttendance
       ? `${API_URL}/api/attendance/corrections`
       : `${API_URL}/api/attendance/corrections?employee_id=${currentUser.id}`;
-    fetch(url)
+    apiFetch(url)
       .then(r => r.json())
       .then(data => setCorrections(data.corrections || []))
       .catch(() => setCorrections([]))
@@ -1283,7 +1404,7 @@ const AttendanceMod = ({ currentUser }) => {
 
   // Build Reports dropdown from actual DB date range
   useEffect(() => {
-    fetch(`${API_URL}/api/attendance/date-range`)
+    apiFetch(`${API_URL}/api/attendance/date-range`)
       .then(r => r.json())
       .then(({ earliest, latest }) => {
         if (!earliest) return;
@@ -1302,6 +1423,25 @@ const AttendanceMod = ({ currentUser }) => {
       .catch(() => {});
   }, []);
 
+  // Load company holidays when the selected year changes
+  useEffect(() => {
+    apiFetch(`${API_URL}/api/holidays?year=${yr}`)
+      .then(r => r.json())
+      .then(data => setHolidays(data.holidays || []))
+      .catch(() => setHolidays([]))
+      .finally(() => setHolidaysLoading(false));
+  }, [yr]);
+
+  const countWorkDays = (y, m) => {
+    const days = new Date(y, m, 0).getDate();
+    let n = 0;
+    for (let d = 1; d <= days; d++) {
+      const dow = new Date(y, m - 1, d).getDay();
+      if (dow !== 0 && dow !== 6) n++;
+    }
+    return n;
+  };
+
   const getMonthStats = (attData) => {
     let present=0, absent=0, late=0, leave=0, holidays=0;
     for (let d=1; d<=dim; d++) {
@@ -1313,34 +1453,51 @@ const AttendanceMod = ({ currentUser }) => {
   };
 
   const myStats = getMonthStats(myAtt);
+  const totalWorkedHours = sumSessionHours(timeLogs);
   const handleCheckIn = async () => {
+    if (clockBusyRef.current || checkedIn) return;
+    clockBusyRef.current = true;
     const now = new Date();
     const t = now.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
     checkInDateRef.current = now;
-    setCheckedIn(true); setCheckInTime(t);
+    setCheckedIn(true); setCheckInTime(t); setCheckOutTime(null);
+    setTimeLogs(prev => [...prev, { in:t, out:null }]);
     setAttendance(prev => ({ ...prev, [currentUser.id]: { ...(prev[currentUser.id]||{}), [todayStr]: "present" } }));
     try {
-      await fetch(`${API_URL}/api/attendance/clock-in`, {
+      const res = await apiFetch(`${API_URL}/api/attendance/clock-in`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ employeeId: currentUser.id, time: t, status: "present" }),
       });
+      const data = await res.json();
+      const savedLogs = parseSessionLogs(data.record?.notes);
+      if (res.ok && savedLogs.length) setTimeLogs(savedLogs);
     } catch { /* fire-and-forget */ }
+    finally { clockBusyRef.current = false; }
   };
   const handleCheckOut = async () => {
+    if (clockBusyRef.current || !checkedIn || !checkInDateRef.current) return;
+    clockBusyRef.current = true;
     const now = new Date();
     const t = now.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
     const hoursWorked = checkInDateRef.current
       ? (now - checkInDateRef.current) / 3600000
       : null;
-    const status = hoursWorked !== null && hoursWorked < 4 ? "late" : "present";
+    const activeLogs = timeLogs.length ? timeLogs : [{ in:checkInTime, out:null }];
+    const nextLogs = activeLogs.map((session, index) => index === activeLogs.length - 1 && session.in && !session.out ? { ...session, out:t } : session);
+    const status = "present";
+    setTimeLogs(nextLogs);
     setCheckOutTime(t); setCheckedIn(false);
     setAttendance(prev => ({ ...prev, [currentUser.id]: { ...(prev[currentUser.id]||{}), [todayStr]: status } }));
     try {
-      await fetch(`${API_URL}/api/attendance/clock-out`, {
+      const res = await apiFetch(`${API_URL}/api/attendance/clock-out`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ employeeId: currentUser.id, time: t, status }),
+        body: JSON.stringify({ employeeId: currentUser.id, time: t, status, hoursWorked }),
       });
+      const data = await res.json();
+      const savedLogs = parseSessionLogs(data.record?.notes);
+      if (res.ok && savedLogs.length) setTimeLogs(savedLogs);
     } catch { /* fire-and-forget */ }
+    finally { clockBusyRef.current = false; }
   };
 
   const attClass = (st) => {
@@ -1356,6 +1513,7 @@ const AttendanceMod = ({ currentUser }) => {
     if (st==="absent") return <span className="bdg bdg-r">Absent</span>;
     if (st==="leave") return <span className="bdg bdg-b">On Leave</span>;
     if (st==="holiday") return <span className="bdg bdg-p">Holiday</span>;
+    if (st==="weekend") return <span className="bdg bdg-gray">Weekend</span>;
     return <span className="bdg bdg-gray">{st}</span>;
   };
 
@@ -1382,7 +1540,7 @@ const AttendanceMod = ({ currentUser }) => {
     if (reason.length < 10) { setCorrError("Add at least 10 characters in the explanation."); return; }
     setCorrSaving(true);
     try {
-      const res = await fetch(`${API_URL}/api/attendance/corrections`, {
+      const res = await apiFetch(`${API_URL}/api/attendance/corrections`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ employeeId: currentUser.id, empName: currentUser.name, date: corrForm.date, reason }),
       });
@@ -1408,7 +1566,7 @@ const AttendanceMod = ({ currentUser }) => {
       [req.employee_id || req.empId]: { ...(prev[req.employee_id || req.empId] || {}), [req.date]: "present" },
     }));
     try {
-      const res = await fetch(`${API_URL}/api/attendance/corrections/${requestId}/approve`, {
+      const res = await apiFetch(`${API_URL}/api/attendance/corrections/${requestId}/approve`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ actionedBy: currentUser.name }),
       });
@@ -1431,7 +1589,7 @@ const AttendanceMod = ({ currentUser }) => {
     if (!req) return;
     setCorrections(prev => prev.map(r => r.id === requestId ? { ...r, status: "rejected", actioned_by: currentUser.name } : r));
     try {
-      const res = await fetch(`${API_URL}/api/attendance/corrections/${requestId}/reject`, {
+      const res = await apiFetch(`${API_URL}/api/attendance/corrections/${requestId}/reject`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ actionedBy: currentUser.name }),
       });
@@ -1441,7 +1599,46 @@ const AttendanceMod = ({ currentUser }) => {
     } catch { setCorrections(prev => prev.map(r => r.id === requestId ? req : r)); }
   };
 
-  return ( 
+  const submitHoliday = async () => {
+    const name = holForm.name.trim();
+    if (!holForm.date) { setHolError("Select the holiday date."); return; }
+    if (!name) { setHolError("Enter a name for the holiday."); return; }
+    setHolSaving(true);
+    try {
+      const res = await apiFetch(`${API_URL}/api/holidays`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ date: holForm.date, name, createdBy: currentUser.name }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setHolError(data.detail || "Could not add holiday."); return; }
+      setHolidays(prev => [...prev, data.holiday].sort((a,b) => a.holiday_date.localeCompare(b.holiday_date)));
+      // Update attendance map so calendar reflects the new holiday immediately
+      const ds = holForm.date;
+      setAttendance(prev => {
+        const next = { ...prev };
+        ALL_USERS.forEach(e => {
+          next[e.id] = { ...(next[e.id] || {}), [ds]: "holiday" };
+        });
+        return next;
+      });
+      setHolForm({ date:"", name:"" });
+      setHolError("");
+      setHolModal(false);
+    } catch { setHolError("Network error. Please try again."); }
+    finally { setHolSaving(false); }
+  };
+
+  const removeHoliday = async (id) => {
+    if (!canApproveAttendance) return;
+    const snapshot = holidays;
+    setHolidays(prev => prev.filter(h => h.id !== id));
+    try {
+      const res = await apiFetch(`${API_URL}/api/holidays/${id}`, { method:"DELETE" });
+      if (!res.ok) setHolidays(snapshot);
+    } catch { setHolidays(snapshot); }
+  };
+
+  return (
     <div>
       <div className="ph">
         <div>
@@ -1460,34 +1657,56 @@ const AttendanceMod = ({ currentUser }) => {
         </div>
       </div>
 
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:18 }}>
+      <div className="g2" style={{ gap:14, marginBottom:18 }}>
         <div className="card" style={{ marginBottom:0 }}>
           <div className="ch"><div className="ct"><Icon n="clockin" s={14}/>Today — {new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"})}</div>{attBadge(attendance[currentUser.id]?.[todayStr])}</div>
           <div className="cb">
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:14 }}>
-              {[{ l:"Clock-in", v:checkInTime||"—:——", c:"var(--green)" },{ l:"Clock-out", v:checkOutTime||"—:——", c:"var(--red)" },{ l:"Hours", v:checkOutTime?"8h 40m":checkInTime?"ongoing":"—", c:"var(--accent)" }].map(s=>(
+            {(() => { const isOnLeave = attendance[currentUser.id]?.[todayStr] === "leave"; return (<>
+            {isOnLeave && (
+              <div style={{ marginBottom:12, padding:"10px 12px", background:"var(--accent-soft)", border:"1px solid rgba(37,99,235,0.2)", borderRadius:"var(--r8)", fontSize:12, color:"var(--accent)", display:"flex", alignItems:"center", gap:8 }}>
+                <Icon n="leave" s={13}/> You are on approved leave today — clock-in is not required.
+              </div>
+            )}
+            <div className="g3" style={{ marginBottom:14 }}>
+              {[{ l:"Clock-in", v:checkInTime||"—:——", c:"var(--green)" },{ l:"Clock-out", v:checkOutTime||"—:——", c:"var(--red)" },{ l:"Hours", v:checkedIn?`${fmtHours(totalWorkedHours)} + ongoing`:fmtHours(totalWorkedHours), c:"var(--accent)" }].map(s=>(
                 <div key={s.l} style={{ textAlign:"center", padding:"10px 6px", background:"var(--raised)", borderRadius:"var(--r8)", border:"1px solid var(--brd)" }}>
                   <div style={{ fontSize:10.5, color:"var(--ink3)", marginBottom:3 }}>{s.l}</div>
                   <div style={{ fontFamily:"var(--mono)", fontWeight:700, fontSize:13.5, color:s.c }}>{s.v}</div>
                 </div>
               ))}
             </div>
-            {!checkedIn && !checkOutTime && <button className="reg-btn" onClick={handleCheckIn}>Clock In</button>}
-            {checkedIn && <button className="reg-btn checked-in" onClick={handleCheckOut}>Clock Out · In since {checkInTime}</button>}
-            {checkOutTime && !checkedIn && <div style={{ background:"var(--green-soft)", border:"1px solid rgba(15,140,90,0.2)", borderRadius:"var(--r8)", padding:"10px 14px", textAlign:"center" }}><div style={{ fontWeight:700, color:"var(--green)" }}>Day complete</div><div style={{ fontSize:12, color:"var(--ink3)" }}>{checkInTime} → {checkOutTime}</div></div>}
+            <div className="g2" style={{ gap:8 }}>
+              <button className="reg-btn" onClick={handleCheckIn} disabled={checkedIn || isOnLeave}>Clock In</button>
+              <button className="reg-btn checked-in" onClick={handleCheckOut} disabled={!checkedIn || isOnLeave}>Clock Out</button>
+            </div>
+            {!isOnLeave && (
+              <div style={{ marginTop:12, background:"var(--raised)", border:"1px solid var(--brd)", borderRadius:"var(--r8)", padding:"10px 12px" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", gap:8, marginBottom:6 }}>
+                  <div className="t3 tsm">{checkedIn ? `Active since ${checkInTime}` : checkOutTime ? "Last session closed" : "No active session"}</div>
+                  <div className="mono fw7" style={{ color:"var(--accent)", fontSize:12 }}>{fmtHours(totalWorkedHours)}</div>
+                </div>
+                {timeLogs.length ? timeLogs.slice(-3).map((log,i)=>(
+                  <div key={`${log.in}-${i}`} style={{ display:"flex", justifyContent:"space-between", fontSize:11.5, color:"var(--ink3)", paddingTop:4 }}>
+                    <span>Session {Math.max(1, timeLogs.length - 2 + i)}</span>
+                    <span className="mono">{log.in || "—"} → {log.out || "ongoing"}</span>
+                  </div>
+                )) : <div className="t3 tsm">Clock in to start your first session.</div>}
+              </div>
+            )}
+            </>); })()}
           </div>
         </div>
         <div className="card" style={{ marginBottom:0 }}>
           <div className="ch"><div className="ct"><Icon n="chart" s={14}/>My Stats — {monthLabel(selMonth)}</div></div>
           <div className="cb">
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8 }}>
+            <div className="g3">
               {[
                 { v:myStats.present, l:"Present", c:"var(--green)", bg:"var(--green-soft)" },
                 { v:myStats.late,    l:"Late",    c:"var(--amber)", bg:"var(--amber-soft)" },
                 { v:myStats.absent,  l:"Absent",  c:"var(--red)",   bg:"var(--red-soft)"   },
                 { v:myStats.leave,   l:"Leave",   c:"var(--accent)",bg:"var(--accent-soft)" },
                 { v:myStats.holidays,l:"Holidays",c:"var(--purple)",bg:"var(--purple-soft)"},
-                { v:Math.round((myStats.present+myStats.late)/(dim-myStats.holidays-Math.floor(dim/7)*2)*100)||0, l:"Attendance %", c:"var(--teal)", bg:"var(--teal-soft)", suffix:"%" },
+                { v:Math.round((myStats.present+myStats.late)/Math.max(1,countWorkDays(yr,mo)-myStats.holidays)*100)||0, l:"Attendance %", c:"var(--teal)", bg:"var(--teal-soft)", suffix:"%" },
               ].map(s=>(
                 <div key={s.l} style={{ textAlign:"center", padding:"10px 6px", background:s.bg, borderRadius:"var(--r8)" }}>
                   <div style={{ fontFamily:"var(--display)", fontWeight:700, fontSize:20, color:s.c }}>{s.v}{s.suffix||""}</div>
@@ -1499,27 +1718,10 @@ const AttendanceMod = ({ currentUser }) => {
         </div>
       </div>
 
-      <div className="sg">
-        {[
-          { v:myStats.present, l:"Days Present", s:monthLabel(selMonth), c:"#0F8C5A" },
-          { v:myStats.absent,  l:"Days Absent",  s:"Unauthorised",       c:"#C8312A" },
-          { v:myStats.late,    l:"Late Arrivals", s:"< 4 hrs worked",    c:"#B06010" },
-          { v:canViewTeam ? `${teamToday.filter(x=>x.status==="present"||x.status==="late").length}/${teamToday.length}` : `${Math.round((myStats.present+myStats.late)/(dim-myStats.holidays-8)*100)||0}%`,
-            l:canViewTeam?"Team Present Today":"My Attendance Rate", s:canViewTeam?"As of now":"This month", c:"#5C35C2" },
-        ].map((s,i)=>(
-          <div className="sc" key={i}>
-            <div className="sc-accent" style={{ background:s.c }}/>
-            <div className="sc-val" style={{ marginTop:10 }}>{s.v}</div>
-            <div className="sc-lbl">{s.l}</div>
-            <div className="sc-sub">{s.s}</div>
-          </div>
-        ))}
-      </div>
-
       <div className="tabs">
-        {["my","calendar","corrections",...(canViewTeam?["team"]:[]),...(canViewReports?["reports"]:[])].map(t=>(
+        {["my","calendar","holidays","corrections",...(canViewTeam?["team"]:[]),...(canViewReports?["reports"]:[])].map(t=>(
           <div key={t} className={`tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>
-            {t==="my"?"My Log":t==="calendar"?"Calendar":t==="corrections"?`Corrections${canApproveAttendance&&pendingCorrections.length>0?` · ${pendingCorrections.length}`:""}`:t==="team"?"Team Today":"Reports"}
+            {t==="my"?"My Log":t==="calendar"?"Calendar":t==="holidays"?`Holidays${holidays.length?` · ${holidays.length}`:""}`:t==="corrections"?`Corrections${canApproveAttendance&&pendingCorrections.length>0?` · ${pendingCorrections.length}`:""}`:t==="team"?"Team Today":"Reports"}
           </div>
         ))}
       </div>
@@ -1536,20 +1738,27 @@ const AttendanceMod = ({ currentUser }) => {
                   const ds=`${yr}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
                   const dt=new Date(yr,mo-1,d);
                   const dayName=dt.toLocaleDateString("en-IN",{weekday:"short"});
-                  const st=myAtt[ds];
+                  const dow=dt.getDay();
+                  const isWeekend=dow===0||dow===6;
+                  const rawSt=myAtt[ds];
+                  const st=rawSt||null;
                   const isFuture=ds>todayStr; const isToday=ds===todayStr;
-                  if (!st&&isFuture&&!isToday) return null;
-                  const mockIn=st==="present"?"09:05":st==="late"?"10:45":null;
-                  const mockOut=st==="present"||st==="late"?"18:15":null;
+                  // Always hide weekends from My Log; hide future working days with no record
+                  if (isWeekend) return null;
+                  if (!rawSt && isFuture && !isToday) return null;
+                  const rec = isToday ? null : (clockRecords[currentUser.id]?.[ds] || null);
+                  const realIn  = isToday ? checkInTime  : (rec?.clock_in  || null);
+                  const realOut = isToday ? checkOutTime : (rec?.clock_out || null);
+                  const realHrs = isToday ? totalWorkedHours : (rec?.hours_worked ? Number(rec.hours_worked) : null);
                   return (
                     <tr key={ds} style={{ background:isToday?"rgba(27,69,245,0.03)":"" }}>
                       <td style={{ fontFamily:"var(--mono)", fontSize:12 }}>{ds}{isToday&&<span className="bdg bdg-b" style={{ fontSize:9,marginLeft:6 }}>Today</span>}</td>
                       <td className="t3 tsm">{dayName}</td>
                       <td>{attBadge(st)}</td>
-                      <td style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--green)" }}>{isToday&&checkInTime?checkInTime:mockIn||"—"}</td>
-                      <td style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--red)" }}>{isToday&&checkOutTime?checkOutTime:mockOut||"—"}</td>
-                      <td style={{ fontFamily:"var(--mono)", fontSize:12 }}>{isToday&&checkOutTime?"8h 40m":st==="present"||st==="late"?"9h 10m":"—"}</td>
-                      <td className="t3 tsm">{st==="late"?"< 4 hours worked":st==="absent"?"Unmarked":st==="leave"?"Approved leave":st==="holiday"?"Public holiday":"—"}</td>
+                      <td style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--green)" }}>{realIn||"—"}</td>
+                      <td style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--red)" }}>{realOut||"—"}</td>
+                      <td style={{ fontFamily:"var(--mono)", fontSize:12 }}>{isToday ? fmtHours(totalWorkedHours) : (realHrs ? fmtHours(realHrs) : "—")}</td>
+                      <td className="t3 tsm">{st==="late"?"Late arrival":st==="absent"?"Not marked":st==="leave"?"Approved leave":st==="holiday"?"Public holiday":"—"}</td>
                     </tr>
                   );
                 }).filter(Boolean)}
@@ -1564,9 +1773,9 @@ const AttendanceMod = ({ currentUser }) => {
           <div className="ch">
             <div className="ct"><Icon n="cal" s={14}/>Calendar — {monthLabel(selMonth)}</div>
             <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-              {[["att-present","Present"],["att-late","Late"],["att-absent","Absent"],["att-leave","Leave"],["att-holiday","Holiday"]].map(([cls,lbl])=>(
+              {[["att-present","Present"],["att-late","Late"],["att-absent","Absent"],["att-leave","Leave"],["att-holiday","Holiday"],["att-wknd","Weekend"]].map(([cls,lbl])=>(
                 <div key={lbl} style={{ display:"flex", alignItems:"center", gap:4, fontSize:11, color:"var(--ink3)" }}>
-                  <div className={`att-day ${cls}`} style={{ width:14, height:14, borderRadius:3, fontSize:8 }}></div>{lbl}
+                  <div className={`att-day ${cls}`} style={{ width:14, height:14, borderRadius:3, fontSize:8, border:"1px solid var(--brd)" }}></div>{lbl}
                 </div>
               ))}
             </div>
@@ -1590,16 +1799,63 @@ const AttendanceMod = ({ currentUser }) => {
               {Array.from({length:dim}).map((_,i)=>{
                 const d=i+1;
                 const ds=`${yr}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-                const st=((canViewTeam || canViewReports)?selectedAtt:myAtt)[ds];
+                const dow=new Date(yr,mo-1,d).getDay();
+                const isWeekend=dow===0||dow===6;
+                const rawSt=((canViewTeam || canViewReports)?selectedAtt:myAtt)[ds];
+                const st=rawSt==="holiday"?"holiday":(isWeekend?"weekend":rawSt);
                 const isFuture=ds>todayStr; const isToday=ds===todayStr;
                 return (
-                  <div key={d} className={`att-day ${isFuture&&!isToday?"att-future":attClass(st)} ${isToday?"att-today":""}`} style={{ fontSize:10 }}>
+                  <div key={d} className={`att-day ${st==="holiday"?"att-holiday":isWeekend?"att-wknd":isFuture&&!isToday?"att-future":attClass(st)} ${isToday?"att-today":""}`} style={{ fontSize:10 }}>
                     <span style={{ fontSize:11, fontWeight:600 }}>{d}</span>
-                    {!isFuture&&st&&<span style={{ fontSize:8 }}>{attLabel(st)}</span>}
+                    {st&&<span style={{ fontSize:8 }}>{attLabel(st)}</span>}
                   </div>
                 );
               })}
             </div>
+          </div>
+        </div>
+      )}
+
+      {tab==="holidays" && (
+        <div className="card">
+          <div className="ch">
+            <div className="ct"><Icon n="cal" s={14}/>Company Holidays — {yr}</div>
+            {canApproveAttendance && (
+              <button className="btn btn-p" onClick={()=>{ setHolError(""); setHolModal(true); }}><Icon n="plus" s={13}/>Add Holiday</button>
+            )}
+          </div>
+          <div className="tw" style={{ maxHeight:480, overflowY:"auto", overscrollBehavior:"none" }}>
+            <table>
+              <thead><tr><th style={{ width:130 }}>Date</th><th style={{ width:90 }}>Day</th><th>Holiday Name</th><th>Added By</th>{canApproveAttendance&&<th style={{ width:80 }}>Action</th>}</tr></thead>
+              <tbody>
+                {holidaysLoading ? (
+                  <tr><td colSpan={5}><div className="empty">Loading…</div></td></tr>
+                ) : holidays.length === 0 ? (
+                  <tr><td colSpan={5}><div className="empty">No holidays defined for {yr}. {canApproveAttendance?"Use \"Add Holiday\" to create one.":"Contact HR to add company holidays."}</div></td></tr>
+                ) : holidays.map(h => {
+                  const d = new Date(h.holiday_date + "T00:00:00");
+                  const dayName = d.toLocaleDateString("en-IN", { weekday:"long" });
+                  return (
+                    <tr key={h.id}>
+                      <td style={{ fontFamily:"var(--mono)", fontSize:12 }}>{h.holiday_date}</td>
+                      <td className="t3 tsm">{dayName}</td>
+                      <td>
+                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                          <div style={{ width:8, height:8, borderRadius:"50%", background:"var(--purple)", flexShrink:0 }}/>
+                          <span className="fw7">{h.name}</span>
+                        </div>
+                      </td>
+                      <td className="t3 tsm">{h.created_by || "—"}</td>
+                      {canApproveAttendance && (
+                        <td>
+                          <button className="btn btn-d btn-sm" onClick={()=>removeHoliday(h.id, h.holiday_date)}>Remove</button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
@@ -1670,16 +1926,20 @@ const AttendanceMod = ({ currentUser }) => {
               <thead><tr><th>Employee</th><th>Dept</th><th>Status</th><th>In</th><th>Out</th><th>Hours</th></tr></thead>
               <tbody>
                 {teamFiltered.map(({emp,status})=>{
-                  const mockIn=status==="present"?"09:03":status==="late"?"10:45":null;
-                  const mockOut=status==="present"||status==="late"?"18:10":null;
+                  const tRec = emp.id === currentUser.id ? null : (clockRecords[emp.id]?.[todayStr] || null);
+                  const tIn  = emp.id === currentUser.id ? checkInTime  : (tRec?.clock_in  || null);
+                  const tOut = emp.id === currentUser.id ? checkOutTime : (tRec?.clock_out || null);
+                  const tHrs = emp.id === currentUser.id
+                    ? (checkedIn ? `${fmtHours(totalWorkedHours)} +` : fmtHours(totalWorkedHours))
+                    : (tRec?.hours_worked ? fmtHours(Number(tRec.hours_worked)) : "—");
                   return (
                     <tr key={emp.id}>
                       <td><div style={{ display:"flex",alignItems:"center",gap:8 }}><div className="avt" style={{ width:28,height:28,background:emp.color }}>{emp.firstName[0]}{emp.lastName[0]}</div><div className="fw7">{emp.name}{emp.id===currentUser.id&&<span className="bdg bdg-b" style={{ fontSize:9,marginLeft:4 }}>You</span>}</div></div></td>
                       <td><span className="bdg bdg-b">{emp.dept}</span></td>
                       <td>{attBadge(status)}</td>
-                      <td style={{ fontFamily:"var(--mono)",fontSize:12,color:"var(--green)" }}>{emp.id===currentUser.id&&checkInTime?checkInTime:mockIn||"—"}</td>
-                      <td style={{ fontFamily:"var(--mono)",fontSize:12,color:"var(--red)" }}>{emp.id===currentUser.id&&checkOutTime?checkOutTime:mockOut||"—"}</td>
-                      <td style={{ fontFamily:"var(--mono)",fontSize:12 }}>{status==="present"||status==="late"?"9h 10m":"—"}</td>
+                      <td style={{ fontFamily:"var(--mono)",fontSize:12,color:"var(--green)" }}>{tIn || "—"}</td>
+                      <td style={{ fontFamily:"var(--mono)",fontSize:12,color:"var(--red)" }}>{tOut || "—"}</td>
+                      <td style={{ fontFamily:"var(--mono)",fontSize:12 }}>{tHrs}</td>
                     </tr>
                   );
                 })}
@@ -1700,8 +1960,8 @@ const AttendanceMod = ({ currentUser }) => {
               <tbody>
                 {ALL_USERS.map(e=>{
                   const st=getMonthStats(attendance[e.id]||{});
-                  const workDays=dim-st.holidays-Math.floor(dim/7)*2;
-                  const pct=workDays>0?Math.round(((st.present+st.late)/workDays)*100):0;
+                  const workDays=Math.max(1,countWorkDays(yr,mo)-st.holidays);
+                  const pct=Math.round(((st.present+st.late)/workDays)*100)||0;
                   return (
                     <tr key={e.id}>
                       <td><div style={{ display:"flex",alignItems:"center",gap:8 }}><div className="avt" style={{ width:26,height:26,background:e.color }}>{e.firstName[0]}{e.lastName[0]}</div><div className="fw7">{e.name}</div></div></td>
@@ -1750,6 +2010,25 @@ const AttendanceMod = ({ currentUser }) => {
           </div>
         </Modal>
       )}
+
+      {holModal && (
+        <Modal title="Add Company Holiday" onClose={()=>{ setHolError(""); setHolModal(false); }} footer={<><button className="btn" onClick={()=>{ setHolError(""); setHolModal(false); }}>Cancel</button><button className="btn btn-p" onClick={submitHoliday} disabled={holSaving}>{holSaving?"Adding…":"Add Holiday"}</button></>}>
+          <div className="fg">
+            <div className="fgrp">
+              <div className="flbl">Holiday date</div>
+              <input className="finp" type="date" value={holForm.date} onChange={e=>setHolForm(p=>({...p,date:e.target.value}))}/>
+            </div>
+            <div className="fgrp">
+              <div className="flbl">Holiday name</div>
+              <input className="finp" type="text" placeholder="e.g. Diwali, Republic Day…" value={holForm.name} onChange={e=>setHolForm(p=>({...p,name:e.target.value}))}/>
+            </div>
+          </div>
+          {holError && <div style={{ marginTop:12, padding:"10px 12px", background:"var(--red-soft)", border:"1px solid rgba(220,38,38,0.2)", borderRadius:"var(--r8)", fontSize:12, color:"var(--red)", fontWeight:600 }}>{holError}</div>}
+          <div style={{ marginTop:12, padding:"10px 12px", background:"var(--purple-soft)", border:"1px solid rgba(92,53,194,0.2)", borderRadius:"var(--r8)", fontSize:12, color:"var(--purple)", display:"flex", alignItems:"center", gap:8 }}>
+            <Icon n="cal" s={13}/> All employees will be automatically marked as Holiday for this date.
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };
@@ -1780,12 +2059,12 @@ const LeaveMod = ({ currentUser }) => {
     const url = (currentUser.isHR || isDirector(currentUser))
       ? `${API_URL}/api/leaves`
       : `${API_URL}/api/leaves?employee_id=${currentUser.id}`;
-    fetch(url)
+    apiFetch(url)
       .then(r => r.json())
       .then(data => setReqs(data.leaveRequests || []))
       .catch(() => setReqs([]))
       .finally(() => setReqsLoading(false));
-    fetch(`${API_URL}/api/leaves/balance/${currentUser.id}`)
+    apiFetch(`${API_URL}/api/leaves/balance/${currentUser.id}`)
       .then(r => r.json())
       .then(data => setMyBalance((data.balances || []).map(b => ({
         type: b.leave_type, total: b.total, used: b.used, color: b.color,
@@ -1839,7 +2118,7 @@ const LeaveMod = ({ currentUser }) => {
     const autoApprove = isDirector(emp);
     setFormSaving(true); setFormError("");
     try {
-      const res = await fetch(`${API_URL}/api/leaves`, {
+      const res = await apiFetch(`${API_URL}/api/leaves`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
           employeeId: form.empId,
@@ -1867,20 +2146,29 @@ const LeaveMod = ({ currentUser }) => {
     const orig = reqs.find(x => x.id === rId);
     setReqs(p => p.map(x => x.id === rId ? { ...x, status: "approved", approved_by: currentUser.name, approvedBy: currentUser.name } : x));
     try {
-      const res = await fetch(`${API_URL}/api/leaves/${rId}/approve`, {
+      const res = await apiFetch(`${API_URL}/api/leaves/${rId}/approve`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ approvedBy: currentUser.name }),
       });
       const data = await res.json();
-      if (res.ok) setReqs(p => p.map(x => x.id === rId ? data.leaveRequest : x));
-      else if (orig) setReqs(p => p.map(x => x.id === rId ? orig : x));
+      if (res.ok) {
+        setReqs(p => p.map(x => x.id === rId ? data.leaveRequest : x));
+        // Refresh balance if the approved leave belongs to the current user
+        if (data.balances && orig?.employee_id === currentUser.id) {
+          setMyBalance(data.balances.map(b => ({ type: b.leave_type, total: b.total, used: b.used, color: b.color })));
+        } else if (orig?.employee_id === currentUser.id) {
+          apiFetch(`${API_URL}/api/leaves/balance/${currentUser.id}`)
+            .then(r => r.json())
+            .then(d => setMyBalance((d.balances || []).map(b => ({ type: b.leave_type, total: b.total, used: b.used, color: b.color }))));
+        }
+      } else if (orig) setReqs(p => p.map(x => x.id === rId ? orig : x));
     } catch { if (orig) setReqs(p => p.map(x => x.id === rId ? orig : x)); }
   };
   const handleReject = async (rId) => {
     const orig = reqs.find(x => x.id === rId);
     setReqs(p => p.map(x => x.id === rId ? { ...x, status: "rejected", approved_by: currentUser.name, approvedBy: currentUser.name } : x));
     try {
-      const res = await fetch(`${API_URL}/api/leaves/${rId}/reject`, {
+      const res = await apiFetch(`${API_URL}/api/leaves/${rId}/reject`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ approvedBy: currentUser.name }),
       });
@@ -2093,7 +2381,7 @@ const TimeLogMod = ({ currentUser }) => {
   const [fil, setFil] = useState("all");
   const [entrySaving, setEntrySaving] = useState(false);
 
-  const isHRReviewer = currentUser.isHR && currentUser.accessLevel >= 2;
+  const isHRReviewer = currentUser.isHR || currentUser.accessLevel >= 4;
   const weekStart = new Date(selectedWeek); const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate()+6);
   const weekLabel = `${weekStart.toLocaleDateString("en-IN",{day:"numeric",month:"short"})} – ${weekEnd.toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"})}`;
   // Derive loading: true while the selected week hasn't been fetched yet.
@@ -2106,7 +2394,7 @@ const TimeLogMod = ({ currentUser }) => {
 
   // Load entries and timesheet when week changes — no synchronous setState.
   useEffect(() => {
-    fetch(`${API_URL}/api/timelogs/entries/${currentUser.id}?week_key=${selectedWeek}`)
+    apiFetch(`${API_URL}/api/timelogs/entries/${currentUser.id}?week_key=${selectedWeek}`)
       .then(r => r.json())
       .then(data => {
         setEntries(data.entries || []);
@@ -2123,7 +2411,7 @@ const TimeLogMod = ({ currentUser }) => {
   // Load all timesheets for HR review tab — initialized as null so spinner shows.
   useEffect(() => {
     if (!isHRReviewer) return;
-    fetch(`${API_URL}/api/timelogs/sheets/all`)
+    apiFetch(`${API_URL}/api/timelogs/sheets/all`)
       .then(r => r.json())
       .then(data => setAllSheets(data.timesheets || []))
       .catch(() => setAllSheets([]));
@@ -2136,7 +2424,7 @@ const TimeLogMod = ({ currentUser }) => {
     if (sheetStatus==="submitted"||sheetStatus==="approved") return;
     setEntrySaving(true);
     try {
-      const res = await fetch(`${API_URL}/api/timelogs/entries`, {
+      const res = await apiFetch(`${API_URL}/api/timelogs/entries`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
           employeeId: currentUser.id,
@@ -2162,7 +2450,7 @@ const TimeLogMod = ({ currentUser }) => {
   const removeEntry = async (entryId) => {
     if (sheetStatus!=="draft") return;
     try {
-      const res = await fetch(`${API_URL}/api/timelogs/entries/${entryId}?employee_id=${currentUser.id}&week_key=${selectedWeek}`, {
+      const res = await apiFetch(`${API_URL}/api/timelogs/entries/${entryId}?employee_id=${currentUser.id}&week_key=${selectedWeek}`, {
         method:"DELETE",
       });
       const data = await res.json();
@@ -2189,7 +2477,7 @@ const TimeLogMod = ({ currentUser }) => {
       s.employee_id===sheet.employee_id && s.week_key===sheet.week_key ? { ...s, status: "approved", approved_by: currentUser.name } : s
     ));
     try {
-      const res = await fetch(`${API_URL}/api/timelogs/sheets/${sheet.employee_id}/${sheet.week_key}/approve`, {
+      const res = await apiFetch(`${API_URL}/api/timelogs/sheets/${sheet.employee_id}/${sheet.week_key}/approve`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ approvedBy: currentUser.name }),
       });
@@ -2210,7 +2498,7 @@ const TimeLogMod = ({ currentUser }) => {
       s.employee_id===sheet.employee_id && s.week_key===sheet.week_key ? { ...s, status: "rejected", approved_by: currentUser.name } : s
     ));
     try {
-      const res = await fetch(`${API_URL}/api/timelogs/sheets/${sheet.employee_id}/${sheet.week_key}/reject`, {
+      const res = await apiFetch(`${API_URL}/api/timelogs/sheets/${sheet.employee_id}/${sheet.week_key}/reject`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ approvedBy: currentUser.name }),
       });
@@ -2526,15 +2814,16 @@ const calcPayroll = (emp, inputs = {}, customFields = [], structure = DEFAULT_ST
   return {
     month:payrollMonth, employeeId:emp.id, employeeName:emp.name, designation:emp.role, department:emp.dept, pan:emp.pan, uan:emp.uan, pfAccount:emp.pfAccount,
     bank:emp.bank, accountNo:emp.accountNo, ifsc:emp.ifsc, joining:emp.joining, location:emp.loc, email:emp.email,
+    gender:emp.gender||"", doj:emp.joining||"", monthNum,
     totalWorkDays, payableDays, lopDays, overtimeHours, hourlyRate, pfBase, grossEarnings,
     earnings:[
-      { label:"Basic Salary",        amount:proRataBasic,    type:"fixed" },
-      { label:"HRA",                 amount:proRataHRA,      type:"fixed" },
-      ...(proRataLTA > 0 ? [{ label:"Leave Travel Allowance", amount:proRataLTA, type:"fixed" }] : []),
-      { label:"Conveyance Allowance",amount:proRataTransport,type:"fixed" },
-      { label:"Special Allowance",   amount:proRataSpecial,  type:"fixed" },
-      ...(overtimePay > 0 ? [{ label:"Overtime Pay", amount:overtimePay, type:"variable" }] : []),
-      ...activeCustomEarnings.filter(e => e.amount > 0),
+      { label:"Basic Salary",        ctcMaster:basic,             amount:proRataBasic,    type:"fixed" },
+      { label:"HRA",                 ctcMaster:hra,               amount:proRataHRA,      type:"fixed" },
+      ...(proRataLTA > 0 ? [{ label:"Leave Travel Allowance", ctcMaster:lta,       amount:proRataLTA,      type:"fixed" }] : []),
+      { label:"Conveyance Allowance",ctcMaster:transport,         amount:proRataTransport,type:"fixed" },
+      { label:"Special Allowance",   ctcMaster:specialAllowance,  amount:proRataSpecial,  type:"fixed" },
+      ...(overtimePay > 0 ? [{ label:"Overtime Pay", ctcMaster:overtimePay, amount:overtimePay, type:"variable" }] : []),
+      ...activeCustomEarnings.filter(e => e.amount > 0).map(e => ({ ...e, ctcMaster:e.amount })),
     ],
     statutory:[
       { label:`Provident Fund (${(pfRateEmp*100).toFixed(0)}%)`, amount:pfEmployee, code:"PF" },
@@ -2562,6 +2851,7 @@ const payslipHTMLDoc = (data) => {
   const esc = s => String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   const pfRate = (parseFloat(getStat("pf_rate_employee", 0.12)) * 100).toFixed(0);
   const pfCeil = parseFloat(getStat("pf_ceiling", 15000)).toLocaleString("en-IN");
+  const esiRate = (parseFloat(getStat("esi_rate_employee", 0.0075)) * 100).toFixed(2);
   const logoURL = window.location.origin + "/doloxe-logo.png";
 
   const earningRows = data.earnings.map(r => `
@@ -2575,6 +2865,7 @@ const payslipHTMLDoc = (data) => {
   const deductRows = [...data.statutory, ...data.voluntary].map(r => {
     let note = "";
     if (r.code === "PF")  note = `${pfRate}% of ₹${pfCeil} cap`;
+    if (r.code === "ESI") note = `${esiRate}% of gross`;
     return `
     <tr>
       <td class="comp">${esc(r.label)}</td>
@@ -2584,74 +2875,85 @@ const payslipHTMLDoc = (data) => {
     </tr>`;
   }).join("");
 
+  const ytdItems = [["Gross", data.ytd.gross], ["Net", data.ytd.net], ["PF", data.ytd.pf], ["TDS", data.ytd.tax]];
+  const taxItems = [["Taxable Income", data.annualTaxableIncome], ["Annual Tax", data.annualTax], ["Monthly TDS", data.tdsMonthly], ["Employer PF", data.pfEmployer]];
+
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8">
 <title>Pay Slip – ${esc(data.month)} – ${esc(data.employeeName)}</title>
 <style>
 @page{margin:10mm;size:A4 portrait}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Arial,'Helvetica Neue',sans-serif;font-size:10pt;color:#111827;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-/* Header */
-.hdr{background:#0D0D0E;color:#fff;padding:13px 18px;display:flex;align-items:center;justify-content:space-between}
+body{font-family:Arial,'Helvetica Neue',sans-serif;font-size:9.5pt;color:#111827;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.hdr{background:#0D0D0E;color:#fff;padding:12px 18px;display:flex;align-items:center;justify-content:space-between}
 .hdr-left{display:flex;align-items:center;gap:12px}
 .co-name{font-size:13pt;font-weight:900;line-height:1.2}
 .co-cin{font-size:7.5pt;color:#9CA3AF;margin-top:2px}
 .hdr-right{text-align:right}
 .slip-lbl{font-size:7pt;color:#9CA3AF;font-weight:700;letter-spacing:1.5px;text-transform:uppercase}
 .slip-month{font-size:13pt;font-weight:900}
-/* Employee bar */
-.emp-bar{background:#F8FAFC;padding:10px 18px;display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid #E5E7EB}
-.emp-name{font-size:12pt;font-weight:900}
-.emp-sub{font-size:9pt;color:#6B7280;margin-top:2px}
-.emp-meta{font-size:8pt;color:#9CA3AF;margin-top:3px}
+/* Employee info */
+.emp-info{padding:10px 18px;background:#F9FAFB;border-bottom:2px solid #111827;display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.emp-main{}
+.emp-name{font-size:13pt;font-weight:900;color:#111827;line-height:1.2}
+.emp-sub{font-size:8.5pt;color:#6B7280;margin-top:3px}
+.emp-meta{display:flex;gap:20px;margin-top:6px;flex-wrap:wrap}
+.emp-kv{font-size:8pt;color:#374151}
+.emp-kv b{color:#111827;font-weight:700}
+.emp-right{text-align:right;font-size:8.5pt;color:#374151;white-space:nowrap}
+.emp-right b{color:#111827;font-weight:700}
+/* Employee detail grid */
+.emp-grid{width:100%;border-collapse:collapse;border-bottom:2px solid #111827}
+.emp-grid td{padding:4px 10px;font-size:8pt;border:1px solid #E5E7EB;vertical-align:top}
+.il{color:#6B7280;font-weight:700;width:130px;background:#F9FAFB;white-space:nowrap}
+.iv{color:#111827;font-weight:600}
 /* Compensation table */
 table.sal{width:100%;border-collapse:collapse}
-table.sal thead th{font-size:8pt;font-weight:700;color:#6B7280;padding:7px 12px;border-bottom:2px solid #111827;background:#F9FAFB;text-transform:uppercase;letter-spacing:0.3px}
+table.sal thead th{font-size:8pt;font-weight:700;color:#6B7280;padding:6px 10px;border-bottom:2px solid #111827;background:#F9FAFB;text-transform:uppercase;letter-spacing:0.3px}
 table.sal thead th:not(:first-child){text-align:right}
-.sec-hdr td{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:5px 12px;border-top:1px solid #E5E7EB}
+.sec-hdr td{font-size:7.5pt;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:4px 10px;border-top:1px solid #E5E7EB}
 .sec-earn td{background:#ECFDF5;color:#059669}
 .sec-ded  td{background:#FEF2F2;color:#DC2626}
-td.comp{padding:5px 12px;font-size:10pt;color:#374151;border-bottom:1px solid #F0F2F5}
-td.amt{padding:5px 12px;text-align:right;font-size:10pt;font-weight:500;border-bottom:1px solid #F0F2F5;white-space:nowrap}
-td.note{padding:5px 10px 5px 4px;text-align:right;font-size:7.5pt;color:#9CA3AF;border-bottom:1px solid #F0F2F5}
-.tot-earn td{font-weight:700;font-size:10.5pt;background:#ECFDF5;color:#065F46;padding:7px 12px;border-top:2px solid #D1FAE5}
+td.comp{padding:5px 10px;font-size:9pt;color:#374151;border-bottom:1px dashed #E5E7EB}
+td.amt{padding:5px 10px;text-align:right;font-size:9pt;font-weight:500;border-bottom:1px dashed #E5E7EB;white-space:nowrap}
+td.note{padding:5px 10px;text-align:right;font-size:7.5pt;color:#9CA3AF;border-bottom:1px dashed #E5E7EB;white-space:nowrap}
+.tot-earn td{font-weight:700;font-size:10pt;background:#ECFDF5;color:#065F46;padding:6px 10px;border-top:2px solid #D1FAE5}
 .tot-earn td:not(:first-child){text-align:right}
-.tot-ded  td{font-weight:700;font-size:10.5pt;background:#FEF2F2;color:#991B1B;padding:7px 12px;border-top:2px solid #FECACA}
+.tot-ded  td{font-weight:700;font-size:10pt;background:#FEF2F2;color:#991B1B;padding:6px 10px;border-top:2px solid #FECACA}
 .tot-ded  td:not(:first-child){text-align:right}
 /* Net band */
-.net-band{background:#0D0D0E;color:#fff;padding:13px 18px;display:flex;justify-content:space-between;align-items:center}
+.net-band{background:#0D0D0E;color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center}
 .net-lbl{font-size:7pt;color:#9CA3AF;font-weight:700;letter-spacing:1px;margin-bottom:3px}
-.net-month{font-size:20pt;font-weight:900}
-.net-sub{font-size:8pt;color:#9CA3AF;margin-top:1px}
-.net-annual{font-size:14pt;font-weight:700}
-/* Info row */
+.net-month{font-size:19pt;font-weight:900}
+.net-annual{font-size:13pt;font-weight:700}
+/* Info row (Pay Date / Mode / Status / Regime) */
 .info-row{display:flex;border-bottom:1px solid #E5E7EB}
-.info-cell{flex:1;padding:8px 14px;border-right:1px solid #E5E7EB}
+.info-cell{flex:1;padding:7px 12px;border-right:1px solid #E5E7EB}
 .info-cell:last-child{border-right:none}
-.info-lbl{font-size:7pt;color:#9CA3AF;font-weight:700;text-transform:uppercase;margin-bottom:2px}
-.info-val{font-size:10pt;font-weight:700}
-/* Bottom */
-.bot{display:flex;border-bottom:1px solid #E5E7EB}
-.ytd-box{flex:1;background:#EFF6FF;padding:10px 14px;border-right:1px solid #DBEAFE}
-.tax-box{flex:1;background:#FFF7ED;padding:10px 14px}
-.box-ttl{font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px}
-.ytd-box .box-ttl{color:#1D4ED8}
-.tax-box .box-ttl{color:#D97706}
-.kv-row{display:flex;gap:16px;flex-wrap:wrap}
-.kv-l{font-size:7.5pt;color:#6B7280;margin-bottom:1px}
-.kv-v{font-size:10pt;font-weight:700}
-.ytd-box .kv-v{color:#1B45F5}
-.tax-box .kv-v{color:#D97706}
+.info-lbl{font-size:7pt;color:#9CA3AF;font-weight:700;text-transform:uppercase;margin-bottom:2px;letter-spacing:0.5px}
+.info-val{font-size:9.5pt;font-weight:700}
+/* YTD + Tax section */
+.summary-row{display:flex;border-bottom:1px solid #E5E7EB}
+.ytd-pane{flex:1;padding:10px 14px;background:#EFF6FF;border-right:1px solid #BFDBFE}
+.tax-pane{flex:1;padding:10px 14px;background:#FFFBEB}
+.pane-lbl{font-size:7pt;font-weight:800;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.ytd-pane .pane-lbl{color:#1D4ED8}
+.tax-pane .pane-lbl{color:#B45309}
+.pane-items{display:flex;gap:18px;flex-wrap:wrap}
+.pane-item{}
+.pane-item-lbl{font-size:7pt;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:2px}
+.ytd-pane .pane-item-val{font-size:10pt;font-weight:800;color:#1D4ED8}
+.tax-pane .pane-item-val{font-size:10pt;font-weight:800;color:#B45309}
 .footer{padding:8px 18px;font-size:7.5pt;color:#9CA3AF;text-align:center;border-top:1px solid #E5E7EB}
 </style>
 </head><body>
 
 <div class="hdr">
   <div class="hdr-left">
-    <img src="${logoURL}" alt="DOLOXE" style="height:48px;object-fit:contain;display:block">
+    <img src="${logoURL}" alt="DOLOXE" style="height:44px;object-fit:contain;display:block" onerror="this.style.display='none'">
     <div>
       <div class="co-name">Doloxe India Private Limited</div>
-      <div class="co-cin">CIN: U72900TG2021PTC149118</div>
+      <div class="co-cin">CIN: U72900TG2021PTC149118 &nbsp;|&nbsp; Pay Slip for the Month of ${esc(data.month)}</div>
     </div>
   </div>
   <div class="hdr-right">
@@ -2660,26 +2962,36 @@ td.note{padding:5px 10px 5px 4px;text-align:right;font-size:7.5pt;color:#9CA3AF;
   </div>
 </div>
 
-<div class="emp-bar">
-  <div>
+<div class="emp-info">
+  <div class="emp-main">
     <div class="emp-name">${esc(data.employeeName)}</div>
     <div class="emp-sub">${esc(data.employeeId)} &nbsp;·&nbsp; ${esc(data.designation)} &nbsp;·&nbsp; ${esc(data.department)}</div>
-    <div class="emp-meta">PAN: ${esc(data.pan||"—")} &nbsp;|&nbsp; UAN: ${esc(data.uan||"—")} &nbsp;|&nbsp; Bank: ${esc(data.bank||"—")} &nbsp;|&nbsp; A/c: ${esc(data.accountNo||"—")} &nbsp;|&nbsp; IFSC: ${esc(data.ifsc||"—")}</div>
+    <div class="emp-meta">
+      <span class="emp-kv"><b>PAN:</b> ${esc(data.pan||"—")}</span>
+      <span class="emp-kv"><b>UAN:</b> ${esc(data.uan||"—")}</span>
+      <span class="emp-kv"><b>PF A/c:</b> ${esc(data.pfAccount||"—")}</span>
+      <span class="emp-kv"><b>Bank:</b> ${esc(data.bank||"—")} &nbsp;A/c: ${esc(data.accountNo||"—")}</span>
+      <span class="emp-kv"><b>IFSC:</b> ${esc(data.ifsc||"—")}</span>
+      <span class="emp-kv"><b>Location:</b> ${esc(data.location||"—")}</span>
+    </div>
   </div>
-  <div style="text-align:right">
-    <div style="font-size:8pt;color:#9CA3AF">Days: ${data.payableDays} &nbsp;·&nbsp; LOP: ${data.lopDays}</div>
-    <div style="font-size:10pt;font-weight:700;margin-top:3px">Pay Date: ${esc(data.payDate)}</div>
-    <div style="font-size:8pt;color:#9CA3AF;margin-top:2px">${esc(data.payrollStatus)}</div>
+  <div class="emp-right">
+    <div><b>Pay Date:</b> ${esc(data.payDate)}</div>
+    <div style="margin-top:4px"><b>Days Paid:</b> ${data.payableDays} of ${data.totalWorkDays}</div>
+    <div style="margin-top:4px"><b>LOP:</b> ${data.lopDays} &nbsp;&nbsp; <b>DOJ:</b> ${esc(data.doj||data.joining||"—")}</div>
+    <div style="margin-top:4px"><b>Gender:</b> ${esc(data.gender||"—")}</div>
   </div>
 </div>
+
+<div style="padding:8px 18px 4px;font-size:8pt;font-weight:700;letter-spacing:0.5px;color:#374151;text-transform:uppercase;background:#fff;border-bottom:1px solid #E5E7EB">Compensation Schedule</div>
 
 <table class="sal">
   <thead>
     <tr>
-      <th style="text-align:left;width:42%">Component</th>
+      <th style="text-align:left;width:44%">Component</th>
       <th style="width:18%">Monthly (₹)</th>
       <th style="width:18%">Annual (₹)</th>
-      <th style="width:22%">Notes</th>
+      <th style="width:20%">Notes</th>
     </tr>
   </thead>
   <tbody>
@@ -2718,19 +3030,17 @@ td.note{padding:5px 10px 5px 4px;text-align:right;font-size:7.5pt;color:#9CA3AF;
     `<div class="info-cell"><div class="info-lbl">${l}</div><div class="info-val">${esc(String(v))}</div></div>`).join("")}
 </div>
 
-<div class="bot">
-  <div class="ytd-box">
-    <div class="box-ttl">Year-to-Date</div>
-    <div class="kv-row">
-      ${[["Gross",data.ytd.gross],["Net",data.ytd.net],["PF",data.ytd.pf],["TDS",data.ytd.tax]].map(([l,v])=>
-        `<div><div class="kv-l">${l}</div><div class="kv-v">${fmt(v)}</div></div>`).join("")}
+<div class="summary-row">
+  <div class="ytd-pane">
+    <div class="pane-lbl">Year-to-Date</div>
+    <div class="pane-items">
+      ${ytdItems.map(([l,v])=>`<div class="pane-item"><div class="pane-item-lbl">${l}</div><div class="pane-item-val">${fmt(v)}</div></div>`).join("")}
     </div>
   </div>
-  <div class="tax-box">
-    <div class="box-ttl">Tax Computation</div>
-    <div class="kv-row">
-      ${[["Taxable",data.annualTaxableIncome],["Annual Tax",data.annualTax],["Monthly TDS",data.tdsMonthly],["Employer PF",data.pfEmployer]].map(([l,v])=>
-        `<div><div class="kv-l">${l}</div><div class="kv-v">${fmt(v)}</div></div>`).join("")}
+  <div class="tax-pane">
+    <div class="pane-lbl">Tax Computation</div>
+    <div class="pane-items">
+      ${taxItems.map(([l,v])=>`<div class="pane-item"><div class="pane-item-lbl">${l}</div><div class="pane-item-val">${fmt(v)}</div></div>`).join("")}
     </div>
   </div>
 </div>
@@ -2738,6 +3048,7 @@ td.note{padding:5px 10px 5px 4px;text-align:right;font-size:7.5pt;color:#9CA3AF;
 <div class="footer">This is a system-generated payslip and does not require a signature. &nbsp;|&nbsp; For queries, contact DOLOXE Finance Operations.</div>
 </body></html>`;
 };
+
 const htmlEscape = value => String(value ?? "")
   .replace(/&/g, "&amp;")
   .replace(/</g, "&lt;")
@@ -2859,7 +3170,7 @@ const SalaryMod = ({ currentUser }) => {
   const saveStatField = async (configKey, rawValue) => {
     setStatSaving(true);
     try {
-      await fetch(`${API_URL}/api/payroll/statutory-config/${configKey}`, {
+      await apiFetch(`${API_URL}/api/payroll/statutory-config/${configKey}`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({ value:String(rawValue), updatedBy:currentUser.id }),
       });
@@ -2877,7 +3188,7 @@ const SalaryMod = ({ currentUser }) => {
   const saveStructureField = async (key, value) => {
     setStructureSaving(true);
     try {
-      await fetch(`${API}/api/payroll/structure/${key}`, {
+      await apiFetch(`${API}/api/payroll/structure/${key}`, {
         method:"PUT", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({ value:parseFloat(value), updatedBy:currentUser.id }),
       });
@@ -2942,7 +3253,7 @@ const SalaryMod = ({ currentUser }) => {
       ...data.statutory.map(s => ({ line_type:"deduction", label:s.label, amount:s.amount, field_config_id:null, is_custom:false })),
       ...data.voluntary.map(v => ({ line_type:"deduction", label:v.label, amount:v.amount, field_config_id:v.fieldId ? parseInt(v.fieldId.replace("cf_",""))||null : null, is_custom:!!v.fieldId })),
     ];
-    fetch(`${API}/api/payroll/payslip-lines`, {
+    apiFetch(`${API}/api/payroll/payslip-lines`, {
       method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ employeeId:employee.id, payrollMonth:month, lines }),
     }).catch(()=>{});
@@ -3026,7 +3337,7 @@ const SalaryMod = ({ currentUser }) => {
     setEmailStatus("Sending payslip...");
     try {
       const htmlBody = payslipEmailHtml(emailModal);
-      const res = await fetch(endpoint, {
+      const res = await apiFetch(endpoint, {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body:JSON.stringify({ to:emailTo, subject, body, htmlBody }),
@@ -3190,7 +3501,7 @@ const SalaryMod = ({ currentUser }) => {
             </div>
 
             {/* Payment & Status info */}
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:0, borderTop:"1px solid var(--brd)", borderBottom:"1px solid var(--brd)" }}>
+            <div className="g4" style={{ borderTop:"1px solid var(--brd)", borderBottom:"1px solid var(--brd)" }}>
               {[["Pay Date", data.payDate], ["Payment Mode", data.paymentMode || "—"], ["Status", data.payrollStatus], ["Tax Regime", data.taxRegime]].map(([l, v], i) => (
                 <div key={l} style={{ padding:"10px 14px", borderRight: i < 3 ? "1px solid var(--brd)" : "none" }}>
                   <div className="if-l">{l}</div>
@@ -3200,7 +3511,7 @@ const SalaryMod = ({ currentUser }) => {
             </div>
 
             {/* YTD + Tax summary */}
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", borderBottom:"1px solid var(--brd)" }}>
+            <div className="g2" style={{ borderBottom:"1px solid var(--brd)" }}>
               <div style={{ padding:"12px 14px", borderRight:"1px solid var(--brd)", background:"var(--accent-soft)" }}>
                 <div className="flbl" style={{ color:"var(--accent)", marginBottom:6 }}>Year-to-Date</div>
                 <div style={{ display:"flex", gap:20, flexWrap:"wrap" }}>
@@ -3315,7 +3626,7 @@ const SalaryMod = ({ currentUser }) => {
               </div>
               <div style={{ background:"var(--raised)", border:"1px solid var(--brd)", borderRadius:"var(--r8)", padding:12, marginBottom:14 }}>
                 <div className="flbl" style={{ marginBottom:8 }}>Live Preview</div>
-                {canSeeSalary ? <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:8 }}>{[["Gross",preview.grossEarnings,"var(--green)"],["PF",preview.statutory.find(s=>s.code==="PF")?.amount || 0,"var(--purple)"],["TDS",preview.tdsMonthly,"var(--amber)"],["Deductions",preview.totalDeductions,"var(--red)"],["Net Pay",preview.netPay,"var(--accent)"]].map(([l,v,c])=><div key={l} style={{ background:"var(--surface)", border:"1px solid var(--brd)", borderRadius:"var(--r8)", padding:"9px 6px", textAlign:"center" }}><div style={{ fontWeight:800, color:c, fontSize:13 }}>{money(v)}</div><div className="t3" style={{ fontSize:10.5 }}>{l}</div></div>)}</div> : <div className="t3" style={{ textAlign:"center", padding:12 }}>Salary preview is confidential.</div>}
+                {canSeeSalary ? <div className="g5">{[["Gross",preview.grossEarnings,"var(--green)"],["PF",preview.statutory.find(s=>s.code==="PF")?.amount || 0,"var(--purple)"],["TDS",preview.tdsMonthly,"var(--amber)"],["Deductions",preview.totalDeductions,"var(--red)"],["Net Pay",preview.netPay,"var(--accent)"]].map(([l,v,c])=><div key={l} style={{ background:"var(--surface)", border:"1px solid var(--brd)", borderRadius:"var(--r8)", padding:"9px 6px", textAlign:"center" }}><div style={{ fontWeight:800, color:c, fontSize:13 }}>{money(v)}</div><div className="t3" style={{ fontSize:10.5 }}>{l}</div></div>)}</div> : <div className="t3" style={{ textAlign:"center", padding:12 }}>Salary preview is confidential.</div>}
                 {canSeeSalary && !preview.esiEligible && <div style={{ marginTop:8, fontSize:11, color:"var(--accent)" }}>ESI is not applicable because gross salary exceeds ₹{(getStat("esi_gross_limit",21000)).toLocaleString("en-IN")}/month.</div>}
               </div>
               <div style={{ display:"flex", gap:8 }}>
@@ -3375,7 +3686,7 @@ const SalaryMod = ({ currentUser }) => {
             <div className="ch"><div className="ct"><Icon n="users" s={14}/>Bulk Payroll Processing</div><button className="btn btn-p" onClick={runBulk} disabled={bulkRunning}>{bulkRunning ? "Processing..." : "Run Payroll for All"}</button></div>
             {bulk.length === 0 ? <div className="cb t3">Run payroll to generate the monthly payroll register for {scopedEmps.length} employees.</div> : <div className="tw"><table><thead><tr>{["Employee","Dept","Gross","PF","ESI","PT","TDS","Deductions","Net Pay","Actions"].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{bulk.map(r=>{ const owner=ALL_USERS.find(e=>e.id===r.employeeId); const allowed=canViewPayrollOf(currentUser,r.employeeId); return <tr key={r.employeeId}><td><div style={{ display:"flex", alignItems:"center", gap:8 }}><div className="avt" style={{ width:26, height:26, background:owner.color }}>{owner.firstName[0]}{owner.lastName[0]}</div><div><div className="fw7">{owner.name}</div><div className="t3 tsm">{r.employeeId}</div></div></div></td><td><span className="bdg bdg-b">{r.department}</span></td>{allowed ? <><td className="fw6" style={{ color:"var(--green)" }}>{money(r.grossEarnings)}</td><td>{money(r.statutory.find(s=>s.code==="PF")?.amount || 0)}</td><td>{r.esiEligible ? money(r.statutory.find(s=>s.code==="ESI")?.amount || 0) : "N/A"}</td><td>{money(r.statutory.find(s=>s.code==="PT")?.amount || 0)}</td><td style={{ color:"var(--amber)" }}>{money(r.tdsMonthly)}</td><td style={{ color:"var(--red)" }}>{money(r.totalDeductions)}</td><td className="fw7" style={{ color:"var(--accent)" }}>{money(r.netPay)}</td></> : <td colSpan="7" className="t3">Confidential</td>}<td><div style={{ display:"flex", gap:4 }}><button className="btn btn-sm" onClick={()=>{ setSlip(r); setTab("slip"); }}><Icon n="eye" s={12}/></button>{allowed&&isPayslipReleased(r)&&<button className="btn btn-sm" onClick={()=>downloadPayslip(r)}><Icon n="dl" s={12}/></button>}</div></td></tr>; })}</tbody></table></div>}
           </div>
-          {bulk.length > 0&&<div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14 }}>{[["PF Challan",bulk.reduce((a,r)=>a+(r.statutory.find(s=>s.code==="PF")?.amount || 0)+r.pfEmployer,0),"var(--purple)"],["ESI Challan",bulk.reduce((a,r)=>a+(r.statutory.find(s=>s.code==="ESI")?.amount || 0)+r.esiEmployer,0),"var(--teal)"],["TDS + PT",bulk.reduce((a,r)=>a+r.tdsMonthly+(r.statutory.find(s=>s.code==="PT")?.amount || 0),0),"var(--amber)"]].map(([l,v,c])=><div key={l} className="card" style={{ marginBottom:0, borderTop:`3px solid ${c}` }}><div className="cb"><div className="flbl">{l}</div><div style={{ fontFamily:"var(--mono)", fontWeight:800, fontSize:18, color:c }}>{money(v)}</div></div></div>)}</div>}
+          {bulk.length > 0&&<div className="g3" style={{ gap:14 }}>{[["PF Challan",bulk.reduce((a,r)=>a+(r.statutory.find(s=>s.code==="PF")?.amount || 0)+r.pfEmployer,0),"var(--purple)"],["ESI Challan",bulk.reduce((a,r)=>a+(r.statutory.find(s=>s.code==="ESI")?.amount || 0)+r.esiEmployer,0),"var(--teal)"],["TDS + PT",bulk.reduce((a,r)=>a+r.tdsMonthly+(r.statutory.find(s=>s.code==="PT")?.amount || 0),0),"var(--amber)"]].map(([l,v,c])=><div key={l} className="card" style={{ marginBottom:0, borderTop:`3px solid ${c}` }}><div className="cb"><div className="flbl">{l}</div><div style={{ fontFamily:"var(--mono)", fontWeight:800, fontSize:18, color:c }}>{money(v)}</div></div></div>)}</div>}
         </div>
       )}
 
@@ -3466,7 +3777,7 @@ const SalaryMod = ({ currentUser }) => {
                             <button className="btn btn-sm" onClick={()=>{ setCfFormData({ ...f }); setCfForm(f.id); }}>Edit</button>
                             <button className="btn btn-sm" style={{ color:"var(--red)" }} onClick={async()=>{
                               if(!window.confirm(`Delete "${f.name}"?`)) return;
-                              await fetch(`${API}/api/payroll/field-configs/${f.id}`,{ method:"DELETE" });
+                              await apiFetch(`${API}/api/payroll/field-configs/${f.id}`,{ method:"DELETE" });
                               setCustomFields(p=>{ const n=p.filter(x=>x.id!==f.id); APP_CUSTOM_FIELDS=n; return n; });
                             }}>Delete</button>
                           </div>
@@ -3557,14 +3868,14 @@ const SalaryMod = ({ currentUser }) => {
               if(!cfFormData.name.trim()){ alert("Field name is required."); return; }
               if(cfFormData.value < 0){ alert("Value must be 0 or more."); return; }
               if(cfForm==="new"){
-                const res = await fetch(`${API}/api/payroll/field-configs`,{
+                const res = await apiFetch(`${API}/api/payroll/field-configs`,{
                   method:"POST", headers:{"Content-Type":"application/json"},
                   body:JSON.stringify({ name:cfFormData.name, category:cfFormData.category, calcType:cfFormData.calcType, value:cfFormData.value, active:cfFormData.active, createdBy:currentUser.id }),
                 });
                 const data = await res.json();
                 if(data.ok) setCustomFields(p=>{ const n=[...p, dbFieldToFrontend(data.field)]; APP_CUSTOM_FIELDS=n; return n; });
               } else {
-                const res = await fetch(`${API}/api/payroll/field-configs/${cfForm}`,{
+                const res = await apiFetch(`${API}/api/payroll/field-configs/${cfForm}`,{
                   method:"PUT", headers:{"Content-Type":"application/json"},
                   body:JSON.stringify({ name:cfFormData.name, category:cfFormData.category, calcType:cfFormData.calcType, value:cfFormData.value, active:cfFormData.active }),
                 });
@@ -3626,23 +3937,168 @@ const SalaryMod = ({ currentUser }) => {
 };
 
 // ─── DIRECTORY ─────────────────────────────────────────────────────────────────
-const DirectoryMod = ({ currentUser }) => {
-  // Only Director + HR can browse all employees — everyone else sees only themselves
-  const canViewDirectory = canOperatePayroll(currentUser);
-  const visibleEmps = useMemo(() => canViewDirectory ? ALL_USERS : [currentUser], [canViewDirectory, currentUser]);
-  const [sel, setSel] = useState(currentUser.id);
-  const [srch, setSrch] = useState("");
-  const [fil, setFil] = useState("All");
+
+
+const EMPTY_EDIT_FORM = {
+  phone:"", location:"", gender:"", dob:"",
+  bank_name:"", bank_account_no:"", ifsc:"", uan:"", pan:"", aadhaar:"", pf_account:"",
+  first_name:"", middle_name:"", last_name:"",
+  department:"", designation:"", email:"",
+  annual_ctc_lpa:"", emp_type:"", notice_period:"",
+  mgr_id:"", access_level:"", date_of_joining:"",
+  employee_id:"",
+};
+
+const EMPTY_CREATE_FORM = {
+  first_name:"", middle_name:"", last_name:"", email:"",
+  department:"", designation:"", annual_ctc_lpa:"",
+  password:"", phone:"", location:"", gender:"",
+  dob:"", date_of_joining:"", emp_type:"Full-time",
+  notice_period:"", mgr_id:"", access_level:"1", is_hr:false,
+  pan:"", aadhaar:"", uan:"", pf_account:"",
+  bank_name:"", bank_account_no:"", ifsc:"",
+};
+
+const DIR_DEPT_LIST = ["Technology","Human Resources","Finance","Marketing","Operations","Sales","Design","Data & Analytics","Product","Legal"];
+const EMP_TYPES     = ["Full-time","Contract","Intern"];
+const GENDERS       = ["Male","Female","Other","Prefer not to say"];
+const ACCESS_LEVELS = [["1","Employee"],["2","Lead"],["3","Manager"],["4","Director"]];
+
+const DirectoryMod = ({ currentUser, onCurrentUserUpdate }) => {
+  const canViewDirectory   = canOperatePayroll(currentUser);
+  const canManageEmployees = canOperatePayroll(currentUser);
+  const [allEmps, setAllEmps] = useState(ALL_USERS);
+  const visibleEmps = useMemo(() => canViewDirectory ? allEmps : allEmps.filter(e=>e.id===currentUser.id), [canViewDirectory, allEmps, currentUser.id]);
+  const [sel, setSel]       = useState(currentUser.id);
+  const [srch, setSrch]     = useState("");
+  const [fil, setFil]       = useState("All");
   const [profTab, setProfTab] = useState("profile");
 
-  const depts = useMemo(() => ["All",...[...new Set(visibleEmps.map(e=>e.dept))]], [visibleEmps]);
+  // Edit modal state
+  const [editOpen, setEditOpen]     = useState(false);
+  const [editTab, setEditTab]       = useState("contact");
+  const [editForm, setEditForm]     = useState(EMPTY_EDIT_FORM);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editErr, setEditErr]       = useState("");
+
+  // Add employee modal state
+  const [addOpen, setAddOpen]   = useState(false);
+  const [addTab, setAddTab]     = useState("basic");
+  const [addForm, setAddForm]   = useState(EMPTY_CREATE_FORM);
+  const [addSaving, setAddSaving] = useState(false);
+  const [addErr, setAddErr]     = useState("");
+
+  const depts    = useMemo(() => ["All",...[...new Set(visibleEmps.map(e=>e.dept))]], [visibleEmps]);
   const filtered = useMemo(() => visibleEmps.filter(e=>(fil==="All"||e.dept===fil)&&(e.name.toLowerCase().includes(srch.toLowerCase())||e.role.toLowerCase().includes(srch.toLowerCase()))), [visibleEmps, fil, srch]);
-  const emp = visibleEmps.find(e=>e.id===sel)||currentUser;
-  const canSeeSensitive = canSeeSensitiveOf(currentUser, sel);
-  const handleSelectEmployee = id => {
-    setSel(id);
-    setProfTab("profile");
+  const emp      = visibleEmps.find(e=>e.id===sel)||currentUser;
+  const canSeeSensitive      = canSeeSensitiveOf(currentUser, sel);
+  const canEditThisEmployee  = canManageEmployees || currentUser.accessLevel >= 3 || sel === currentUser.id;
+  const handleSelectEmployee = id => { setSel(id); setProfTab("profile"); };
+
+  const openEdit = () => {
+    setEditErr(""); setEditTab("contact");
+    setEditForm({
+      phone: emp.phone||"", location: emp.loc||"", gender: emp.gender||"",
+      dob: emp.dob||"", bank_name: emp.bank||"", bank_account_no: emp.accountNo||"",
+      ifsc: emp.ifsc||"", uan: emp.uan||"", pan: emp.pan||"",
+      aadhaar: emp.aadhaar||"", pf_account: emp.pfAccount||"",
+      first_name: emp.firstName||"", middle_name: emp.middleName||"",
+      last_name: emp.lastName||"", department: emp.dept||"",
+      designation: emp.role||"", email: emp.email||"",
+      annual_ctc_lpa: emp.ctcLPA!=null ? String(emp.ctcLPA) : "",
+      emp_type: emp.empType||"Full-time", notice_period: emp.noticePeriod||"",
+      mgr_id: emp.mgr||"", access_level: String(emp.accessLevel||1),
+      date_of_joining: emp.joining||"",
+      employee_id: emp.id||"",
+    });
+    setEditOpen(true);
   };
+
+  const saveEdit = async () => {
+    setEditSaving(true); setEditErr("");
+    try {
+      // Snapshot of original values — same mapping used in openEdit.
+      const orig = {
+        phone: emp.phone||"", location: emp.loc||"", gender: emp.gender||"",
+        dob: emp.dob||"", bank_name: emp.bank||"", bank_account_no: emp.accountNo||"",
+        ifsc: emp.ifsc||"", uan: emp.uan||"", pan: emp.pan||"",
+        aadhaar: emp.aadhaar||"", pf_account: emp.pfAccount||"",
+        first_name: emp.firstName||"", middle_name: emp.middleName||"",
+        last_name: emp.lastName||"", department: emp.dept||"",
+        designation: emp.role||"", email: emp.email||"",
+        annual_ctc_lpa: emp.ctcLPA!=null ? String(emp.ctcLPA) : "",
+        emp_type: emp.empType||"Full-time", notice_period: emp.noticePeriod||"",
+        mgr_id: emp.mgr||"", access_level: String(emp.accessLevel||1),
+        date_of_joining: emp.joining||"",
+        employee_id: emp.id||"",
+      };
+      // Only send fields the user actually changed (diff-based).
+      // This lets empty string mean "cleared" rather than "unchanged".
+      const norm = v => (v === null || v === undefined) ? "" : String(v);
+      const changed = {};
+      for (const k of Object.keys(orig)) {
+        if (norm(editForm[k]) !== norm(orig[k])) changed[k] = editForm[k];
+      }
+      if (!Object.keys(changed).length) { setEditOpen(false); return; }
+      const body = { ...changed, requestor_id: currentUser.id };
+      if ("annual_ctc_lpa" in body) body.annual_ctc_lpa = parseFloat(body.annual_ctc_lpa);
+      if ("access_level" in body)   body.access_level   = parseInt(body.access_level, 10);
+      // employee_id in the form maps to new_employee_id in the API (URL already carries the old id)
+      if ("employee_id" in body) { body.new_employee_id = body.employee_id; delete body.employee_id; }
+      const oldId = emp.id;  // capture before the API call — may change if we're renaming
+      const res  = await apiFetch(`${API_URL}/api/employees/${emp.id}`, {
+        method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const errMsg = Array.isArray(data.detail)
+          ? data.detail.map(e => e.msg || JSON.stringify(e)).join("; ")
+          : (data.detail || "Save failed.");
+        console.error("[saveEdit] error:", res.status, data);
+        setEditErr(errMsg);
+        return;
+      }
+      console.log("[saveEdit] success:", data.employee);
+      const updated = data.employee;
+      // Use oldId for the map lookup — updated.id may be a new employee_id after rename
+      ALL_USERS = ALL_USERS.map(e => e.id === oldId ? updated : e);
+      window.__HR_ALL_USERS__ = ALL_USERS;
+      setAllEmps([...ALL_USERS]);
+      setSel(updated.id);  // keep selection pointing at the (possibly renamed) employee
+      if (oldId === currentUser.id && onCurrentUserUpdate) onCurrentUserUpdate(updated);
+      setEditOpen(false);
+    } catch(err) { console.error("[saveEdit] catch:", err); setEditErr("Network error. Try again."); }
+    finally { setEditSaving(false); }
+  };
+
+  const saveAdd = async () => {
+    if (!addForm.first_name.trim()||!addForm.last_name.trim()||!addForm.email.trim()||
+        !addForm.department||!addForm.designation.trim()||!addForm.annual_ctc_lpa||!addForm.password.trim()) {
+      setAddErr("First name, last name, email, department, designation, CTC and password are required."); return;
+    }
+    setAddSaving(true); setAddErr("");
+    try {
+      const body = { ...addForm, requestor_id: currentUser.id };
+      body.annual_ctc_lpa = parseFloat(body.annual_ctc_lpa);
+      body.access_level   = parseInt(body.access_level, 10);
+      const res  = await apiFetch(`${API_URL}/api/employees`, {
+        method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) { setAddErr(data.detail || "Create failed."); return; }
+      const newEmp = data.employee;
+      ALL_USERS = [...ALL_USERS, newEmp];
+      window.__HR_ALL_USERS__ = ALL_USERS;
+      setAllEmps([...ALL_USERS]);
+      setAddOpen(false);
+      setAddForm(EMPTY_CREATE_FORM);
+      setSel(newEmp.id);
+    } catch { setAddErr("Network error. Try again."); }
+    finally { setAddSaving(false); }
+  };
+
+  const ef = (k, v) => setEditForm(p=>({...p,[k]:v}));
+  const af = (k, v) => setAddForm(p=>({...p,[k]:v}));
 
   return (
     <div>
@@ -3650,8 +4106,11 @@ const DirectoryMod = ({ currentUser }) => {
         <div>
           <div className="ph-eyebrow">People</div>
           <div className="ph-title">{canViewDirectory ? "Employee Directory" : "My Profile"}</div>
-          <div className="ph-sub">{canViewDirectory ? `${ALL_USERS.length} employees across ${[...new Set(ALL_USERS.map(e=>e.dept))].length} departments · Director & HR access` : "Your personal HR profile — only you and HR can view your details"}</div>
+          <div className="ph-sub">{canViewDirectory ? `${allEmps.length} employees across ${[...new Set(allEmps.map(e=>e.dept))].length} departments · Director & HR access` : "Your personal HR profile — only you and HR can view your details"}</div>
         </div>
+        {canManageEmployees && (
+          <button className="btn btn-p" onClick={()=>{ setAddErr(""); setAddForm(EMPTY_CREATE_FORM); setAddTab("basic"); setAddOpen(true); }}><Icon n="plus" s={13}/>Add Employee</button>
+        )}
       </div>
       {canViewDirectory && (
         <div style={{ display:"flex",gap:7,marginBottom:14,alignItems:"center",flexWrap:"wrap" }}>
@@ -3683,7 +4142,12 @@ const DirectoryMod = ({ currentUser }) => {
                 <div className="avt" style={{ width:44,height:44,fontSize:15,background:emp.color }}>{emp.firstName[0]}{emp.lastName[0]}</div>
                 <div><div className="fw7" style={{ fontSize:15,fontFamily:"var(--display)" }}>{emp.name}</div><div className="t3 tsm">{emp.role} · {emp.dept}</div></div>
               </div>
-              <div style={{ display:"flex",gap:6,alignItems:"center" }}><span className="bdg bdg-b">{emp.loc}</span></div>
+              <div style={{ display:"flex",gap:6,alignItems:"center" }}>
+                <span className="bdg bdg-b">{emp.loc}</span>
+                {canEditThisEmployee && (
+                  <button className="btn" style={{ fontSize:12,padding:"4px 10px" }} onClick={openEdit}><Icon n="edit" s={12}/>Edit</button>
+                )}
+              </div>
             </div>
             <div style={{ display:"flex",borderBottom:"1px solid var(--brd)" }}>
               {["profile",...(canSeeSensitive?["identity"]:[]),"employment"].map(t=><div key={t} className={`tab${profTab===t?" active":""}`} onClick={()=>setProfTab(t)} style={{ padding:"8px 14px",fontSize:12 }}>{t.charAt(0).toUpperCase()+t.slice(1)}</div>)}
@@ -3707,13 +4171,123 @@ const DirectoryMod = ({ currentUser }) => {
               )}
               {profTab==="employment"&&(
                 <div>
-                  <div className="info-grid">{[["Date of Joining",emp.joining],["Tenure",`${Math.floor((new Date()-new Date(emp.joining))/31536000000)} years`],["Employment Type",emp.empType],["Notice Period",emp.noticePeriod],["Annual CTC",canSeeSensitiveOf(currentUser,emp.id)?`₹${emp.ctcLPA} LPA`:"Confidential"],["Location",emp.loc],["Manager",emp.mgr?ALL_USERS.find(e=>e.id===emp.mgr)?.name||"—":"None"],["Performance",`${emp.perf}/5.0`]].map(([k,v])=><div key={k} className="if"><div className="if-l">{k}</div><div style={{ fontWeight:600,fontSize:12.5 }}>{v}</div></div>)}</div>
+                  <div className="info-grid">{[["Date of Joining",emp.joining],["Tenure",`${Math.floor((new Date()-new Date(emp.joining))/31536000000)} years`],["Employment Type",emp.empType],["Notice Period",emp.noticePeriod],["Annual CTC",canSeeSensitiveOf(currentUser,emp.id)?`₹${emp.ctcLPA} LPA`:"Confidential"],["Location",emp.loc],["Manager",emp.mgr?allEmps.find(e=>e.id===emp.mgr)?.name||"—":"None"],["Performance",`${emp.perf}/5.0`]].map(([k,v])=><div key={k} className="if"><div className="if-l">{k}</div><div style={{ fontWeight:600,fontSize:12.5 }}>{v}</div></div>)}</div>
                 </div>
               )}
             </div>
           </div>
         )}
       </div>
+
+      {/* ── Edit Employee Modal ── */}
+      {editOpen && (
+        <Modal title={`Edit — ${emp.name}`} onClose={()=>setEditOpen(false)} footer={
+          <><button className="btn" onClick={()=>setEditOpen(false)}>Cancel</button><button className="btn btn-p" onClick={saveEdit} disabled={editSaving}>{editSaving?"Saving…":"Save Changes"}</button></>
+        }>
+          {editErr && <div style={{ padding:"9px 12px",background:"#fef2f2",borderRadius:"var(--r8)",fontSize:12,color:"var(--red)",marginBottom:12 }}>{editErr}</div>}
+          <div style={{ display:"flex",borderBottom:"1px solid var(--brd)",marginBottom:14 }}>
+            {["contact","banking",...((canManageEmployees||currentUser.accessLevel>=3)?["employment"]:[])].map(t=>(
+              <div key={t} className={`tab${editTab===t?" active":""}`} onClick={()=>setEditTab(t)} style={{ padding:"7px 13px",fontSize:12,cursor:"pointer" }}>{t.charAt(0).toUpperCase()+t.slice(1)}</div>
+            ))}
+          </div>
+          {editTab==="contact"&&(
+            <div className="fg">
+              <div className="fgrp"><div className="flbl">Phone</div><input className="finp" value={editForm.phone} onChange={e=>ef("phone",e.target.value)} placeholder="+91 98765 43210"/></div>
+              <div className="fgrp"><div className="flbl">Location</div><input className="finp" value={editForm.location} onChange={e=>ef("location",e.target.value)} placeholder="City, State"/></div>
+              <div className="fgrp"><div className="flbl">Gender</div><select className="fsel" value={editForm.gender} onChange={e=>ef("gender",e.target.value)}><option value="">— select —</option>{GENDERS.map(g=><option key={g}>{g}</option>)}</select></div>
+              <div className="fgrp"><div className="flbl">Date of Birth</div><input className="finp" type="date" value={editForm.dob} onChange={e=>ef("dob",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">PAN</div><input className="finp" value={editForm.pan} onChange={e=>ef("pan",e.target.value.toUpperCase())} placeholder="ABCDE1234F" maxLength={10}/></div>
+              <div className="fgrp"><div className="flbl">Aadhaar</div><input className="finp" value={editForm.aadhaar} onChange={e=>ef("aadhaar",e.target.value)} placeholder="XXXX XXXX XXXX" maxLength={14}/></div>
+            </div>
+          )}
+          {editTab==="banking"&&(
+            <div className="fg">
+              <div className="fgrp"><div className="flbl">Bank Name</div><input className="finp" value={editForm.bank_name} onChange={e=>ef("bank_name",e.target.value)} placeholder="HDFC Bank"/></div>
+              <div className="fgrp"><div className="flbl">Account Number</div><input className="finp" value={editForm.bank_account_no} onChange={e=>ef("bank_account_no",e.target.value)} placeholder="12345678901234"/></div>
+              <div className="fgrp"><div className="flbl">IFSC Code</div><input className="finp" value={editForm.ifsc} onChange={e=>ef("ifsc",e.target.value.toUpperCase())} placeholder="HDFC0001234"/></div>
+              <div className="fgrp"><div className="flbl">UAN</div><input className="finp" value={editForm.uan} onChange={e=>ef("uan",e.target.value)} placeholder="100987654321"/></div>
+              <div className="fgrp ff"><div className="flbl">PF Account</div><input className="finp" value={editForm.pf_account} onChange={e=>ef("pf_account",e.target.value)} placeholder="MH/BAN/12345/000/0000001"/></div>
+            </div>
+          )}
+          {editTab==="employment"&&(canManageEmployees||currentUser.accessLevel>=3)&&(
+            <div className="fg">
+              <div className="fgrp ff">
+                <div className="flbl">Employee ID</div>
+                <input className="finp" value={editForm.employee_id} onChange={e=>ef("employee_id",e.target.value.toUpperCase())} placeholder="EMP-0042" style={{fontFamily:"monospace",letterSpacing:"0.04em"}}/>
+                <div style={{fontSize:11,color:"#888",marginTop:3}}>Changing this ID updates all records. Use with caution.</div>
+              </div>
+              {canManageEmployees&&<>
+              <div className="fgrp"><div className="flbl">First Name</div><input className="finp" value={editForm.first_name} onChange={e=>ef("first_name",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Last Name</div><input className="finp" value={editForm.last_name} onChange={e=>ef("last_name",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Middle Name</div><input className="finp" value={editForm.middle_name} onChange={e=>ef("middle_name",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Email</div><input className="finp" type="email" value={editForm.email} onChange={e=>ef("email",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Department</div><select className="fsel" value={editForm.department} onChange={e=>ef("department",e.target.value)}>{DIR_DEPT_LIST.map(d=><option key={d}>{d}</option>)}</select></div>
+              <div className="fgrp"><div className="flbl">Designation</div><input className="finp" value={editForm.designation} onChange={e=>ef("designation",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Date of Joining</div><input className="finp" type="date" value={editForm.date_of_joining} onChange={e=>ef("date_of_joining",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Annual CTC (LPA)</div><input className="finp" type="number" step="0.1" min="0" value={editForm.annual_ctc_lpa} onChange={e=>ef("annual_ctc_lpa",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Employment Type</div><select className="fsel" value={editForm.emp_type} onChange={e=>ef("emp_type",e.target.value)}>{EMP_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
+              <div className="fgrp"><div className="flbl">Notice Period</div><input className="finp" value={editForm.notice_period} onChange={e=>ef("notice_period",e.target.value)} placeholder="30 days"/></div>
+              <div className="fgrp ff"><div className="flbl">Manager</div><select className="fsel" value={editForm.mgr_id} onChange={e=>ef("mgr_id",e.target.value)}><option value="">— No manager —</option>{allEmps.filter(e=>e.id!==emp.id).map(e=><option key={e.id} value={e.id}>{e.name} ({e.id})</option>)}</select></div>
+              <div className="fgrp"><div className="flbl">Access Level</div><select className="fsel" value={editForm.access_level} onChange={e=>ef("access_level",e.target.value)}>{ACCESS_LEVELS.map(([v,l])=><option key={v} value={v}>{l} (Level {v})</option>)}</select></div>
+              </>}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* ── Add Employee Modal ── */}
+      {addOpen && (
+        <Modal title="Add New Employee" onClose={()=>setAddOpen(false)} footer={
+          <><button className="btn" onClick={()=>setAddOpen(false)}>Cancel</button><button className="btn btn-p" onClick={saveAdd} disabled={addSaving}>{addSaving?"Creating…":"Create Employee"}</button></>
+        }>
+          {addErr && <div style={{ padding:"9px 12px",background:"#fef2f2",borderRadius:"var(--r8)",fontSize:12,color:"var(--red)",marginBottom:12 }}>{addErr}</div>}
+          <div style={{ display:"flex",borderBottom:"1px solid var(--brd)",marginBottom:14 }}>
+            {["basic","employment","identity"].map(t=>(
+              <div key={t} className={`tab${addTab===t?" active":""}`} onClick={()=>setAddTab(t)} style={{ padding:"7px 13px",fontSize:12,cursor:"pointer" }}>{t.charAt(0).toUpperCase()+t.slice(1)}</div>
+            ))}
+          </div>
+          {addTab==="basic"&&(
+            <div className="fg">
+              <div className="fgrp"><div className="flbl">First Name <span style={{color:"var(--red)"}}>*</span></div><input className="finp" value={addForm.first_name} onChange={e=>af("first_name",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Last Name <span style={{color:"var(--red)"}}>*</span></div><input className="finp" value={addForm.last_name} onChange={e=>af("last_name",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Middle Name</div><input className="finp" value={addForm.middle_name} onChange={e=>af("middle_name",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Email <span style={{color:"var(--red)"}}>*</span></div><input className="finp" type="email" value={addForm.email} onChange={e=>af("email",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Phone</div><input className="finp" value={addForm.phone} onChange={e=>af("phone",e.target.value)} placeholder="+91 98765 43210"/></div>
+              <div className="fgrp"><div className="flbl">Gender</div><select className="fsel" value={addForm.gender} onChange={e=>af("gender",e.target.value)}><option value="">— select —</option>{GENDERS.map(g=><option key={g}>{g}</option>)}</select></div>
+              <div className="fgrp"><div className="flbl">Date of Birth</div><input className="finp" type="date" value={addForm.dob} onChange={e=>af("dob",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Location</div><input className="finp" value={addForm.location} onChange={e=>af("location",e.target.value)} placeholder="City, State"/></div>
+              <div className="fgrp"><div className="flbl">Initial Password <span style={{color:"var(--red)"}}>*</span></div><input className="finp" type="password" value={addForm.password} onChange={e=>af("password",e.target.value)} placeholder="Min 6 characters"/></div>
+            </div>
+          )}
+          {addTab==="employment"&&(
+            <div className="fg">
+              <div className="fgrp"><div className="flbl">Department <span style={{color:"var(--red)"}}>*</span></div><select className="fsel" value={addForm.department} onChange={e=>af("department",e.target.value)}><option value="">— select —</option>{DIR_DEPT_LIST.map(d=><option key={d}>{d}</option>)}</select></div>
+              <div className="fgrp"><div className="flbl">Designation <span style={{color:"var(--red)"}}>*</span></div><input className="finp" value={addForm.designation} onChange={e=>af("designation",e.target.value)} placeholder="e.g. Software Engineer"/></div>
+              <div className="fgrp"><div className="flbl">Annual CTC (LPA) <span style={{color:"var(--red)"}}>*</span></div><input className="finp" type="number" step="0.1" min="0" value={addForm.annual_ctc_lpa} onChange={e=>af("annual_ctc_lpa",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Date of Joining</div><input className="finp" type="date" value={addForm.date_of_joining} onChange={e=>af("date_of_joining",e.target.value)}/></div>
+              <div className="fgrp"><div className="flbl">Employment Type</div><select className="fsel" value={addForm.emp_type} onChange={e=>af("emp_type",e.target.value)}>{EMP_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
+              <div className="fgrp"><div className="flbl">Notice Period</div><input className="finp" value={addForm.notice_period} onChange={e=>af("notice_period",e.target.value)} placeholder="30 days"/></div>
+              <div className="fgrp ff"><div className="flbl">Manager</div><select className="fsel" value={addForm.mgr_id} onChange={e=>af("mgr_id",e.target.value)}><option value="">— No manager —</option>{allEmps.map(e=><option key={e.id} value={e.id}>{e.name} ({e.id})</option>)}</select></div>
+              <div className="fgrp"><div className="flbl">Access Level</div><select className="fsel" value={addForm.access_level} onChange={e=>af("access_level",e.target.value)}>{ACCESS_LEVELS.map(([v,l])=><option key={v} value={v}>{l} (Level {v})</option>)}</select></div>
+              <div className="fgrp" style={{ alignItems:"center",justifyContent:"flex-start",gap:10,flexDirection:"row",paddingTop:18 }}>
+                <input type="checkbox" id="addIsHR" checked={addForm.is_hr} onChange={e=>af("is_hr",e.target.checked)} style={{ width:16,height:16 }}/>
+                <label htmlFor="addIsHR" className="flbl" style={{ marginBottom:0,cursor:"pointer" }}>HR Admin access</label>
+              </div>
+            </div>
+          )}
+          {addTab==="identity"&&(
+            <div className="fg">
+              <div className="fgrp"><div className="flbl">PAN</div><input className="finp" value={addForm.pan} onChange={e=>af("pan",e.target.value.toUpperCase())} placeholder="ABCDE1234F" maxLength={10}/></div>
+              <div className="fgrp"><div className="flbl">Aadhaar</div><input className="finp" value={addForm.aadhaar} onChange={e=>af("aadhaar",e.target.value)} placeholder="XXXX XXXX XXXX" maxLength={14}/></div>
+              <div className="fgrp"><div className="flbl">UAN</div><input className="finp" value={addForm.uan} onChange={e=>af("uan",e.target.value)} placeholder="100987654321"/></div>
+              <div className="fgrp"><div className="flbl">PF Account</div><input className="finp" value={addForm.pf_account} onChange={e=>af("pf_account",e.target.value)} placeholder="MH/BAN/12345/000/0000001"/></div>
+              <div className="fgrp"><div className="flbl">Bank Name</div><input className="finp" value={addForm.bank_name} onChange={e=>af("bank_name",e.target.value)} placeholder="HDFC Bank"/></div>
+              <div className="fgrp"><div className="flbl">Account Number</div><input className="finp" value={addForm.bank_account_no} onChange={e=>af("bank_account_no",e.target.value)} placeholder="12345678901234"/></div>
+              <div className="fgrp"><div className="flbl">IFSC Code</div><input className="finp" value={addForm.ifsc} onChange={e=>af("ifsc",e.target.value.toUpperCase())} placeholder="HDFC0001234"/></div>
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 };
@@ -3914,7 +4488,7 @@ const PerfMod = ({ currentUser }) => {
   const canAddReview = canManage(currentUser) || currentUser.isHR;
 
   useEffect(() => {
-    fetch(`${API_URL}/api/goals?employee_id=${currentUser.id}`)
+    apiFetch(`${API_URL}/api/goals?employee_id=${currentUser.id}`)
       .then(r => r.json())
       .then(d => setGoals(d.goals || []))
       .catch(() => {})
@@ -3922,7 +4496,7 @@ const PerfMod = ({ currentUser }) => {
   }, [currentUser.id]);
 
   const loadReviews = (empId) => {
-    fetch(`${API_URL}/api/perf/reviews/${empId}`)
+    apiFetch(`${API_URL}/api/perf/reviews/${empId}`)
       .then(r => r.json())
       .then(d => setReviews(d.reviews || []))
       .catch(() => {})
@@ -3940,7 +4514,7 @@ const PerfMod = ({ currentUser }) => {
     if (!gTitle.trim()) return;
     setGSaving(true);
     try {
-      const res = await fetch(`${API_URL}/api/goals`, {
+      const res = await apiFetch(`${API_URL}/api/goals`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ employeeId: currentUser.id, title: gTitle.trim(), target: gTarget.trim(), notes: gNotes.trim(), isKey: gIsKey, progress: Number(gProgress), status: gStatus, quarter }),
       });
@@ -3952,7 +4526,7 @@ const PerfMod = ({ currentUser }) => {
   const handleDeleteGoal = async (id) => {
     if (!window.confirm("Delete this goal?")) return;
     setGoals(p => p.filter(g => g.id !== id));
-    try { await fetch(`${API_URL}/api/goals/${id}`, { method: "DELETE" }); } catch { /* ignore */ }
+    try { await apiFetch(`${API_URL}/api/goals/${id}`, { method: "DELETE" }); } catch { /* ignore */ }
   };
 
   const openReviewModal = () => {
@@ -3965,7 +4539,7 @@ const PerfMod = ({ currentUser }) => {
     if (!rvPeriod.trim()) return;
     setRvSaving(true);
     try {
-      const res = await fetch(`${API_URL}/api/perf/reviews`, {
+      const res = await apiFetch(`${API_URL}/api/perf/reviews`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ employeeId: rvEmployeeId, reviewerId: currentUser.id, period: rvPeriod.trim(), score: rvScore ? parseFloat(rvScore) : null, feedback: rvFeedback.trim(), status: rvStatus, reviewDate: rvDate || null }),
       });
@@ -3977,7 +4551,7 @@ const PerfMod = ({ currentUser }) => {
   const handleDeleteReview = async (id) => {
     if (!window.confirm("Delete this review?")) return;
     setReviews(p => p.filter(r => r.id !== id));
-    try { await fetch(`${API_URL}/api/perf/reviews/${id}`, { method: "DELETE" }); } catch { /* ignore */ }
+    try { await apiFetch(`${API_URL}/api/perf/reviews/${id}`, { method: "DELETE" }); } catch { /* ignore */ }
   };
 
   return (
@@ -4074,7 +4648,8 @@ const DocsMod = ({ currentUser }) => {
   const [loading, setLoading] = useState(true);
   const [catFil, setCatFil] = useState("All");
   const [showUpload, setShowUpload] = useState(false);
-  const [deleting, setDeleting] = useState(null);
+  const [selectedEmpId, setSelectedEmpId] = useState(currentUser.id);
+  const [empSearch, setEmpSearch] = useState("");
 
   // Upload form state
   const [upFile, setUpFile] = useState(null);
@@ -4090,7 +4665,7 @@ const DocsMod = ({ currentUser }) => {
       setLoading(true);
       const qs = canManage ? "" : `?employee_id=${currentUser.id}`;
       try {
-        const res = await fetch(`${API_DOCS}${qs}`);
+        const res = await apiFetch(`${API_DOCS}${qs}`);
         const data = await res.json();
         setDocs(data.documents || []);
       } catch {
@@ -4102,8 +4677,19 @@ const DocsMod = ({ currentUser }) => {
     loadDocs();
   }, [API_DOCS, canManage, currentUser.id]);
 
-  const cats = ["All", ...DOC_CATS.filter(c => docs.some(d => d.category === c))];
-  const filtered = docs.filter(d => catFil === "All" || d.category === catFil);
+
+  const selectedEmp = ALL_USERS.find(u => u.id === selectedEmpId) || null;
+  const empDocCount = (empId) => docs.filter(d => d.employee_id === empId).length;
+
+  const visibleEmps = canManage
+    ? ALL_USERS.filter(u => empSearch
+        ? u.name.toLowerCase().includes(empSearch.toLowerCase()) || u.id.toLowerCase().includes(empSearch.toLowerCase())
+        : true)
+    : [];
+
+  const profileDocs = docs.filter(d => d.employee_id === selectedEmpId);
+  const cats = ["All", ...DOC_CATS.filter(c => profileDocs.some(d => d.category === c))];
+  const filtered = profileDocs.filter(d => catFil === "All" || d.category === catFil);
 
   const handleUpload = async () => {
     if (!upFile) { alert("Please select a file."); return; }
@@ -4115,19 +4701,10 @@ const DocsMod = ({ currentUser }) => {
       fd.append("uploadedBy", currentUser.id);
       fd.append("category", upCat);
       fd.append("description", upDesc);
-      const res = await fetch(`${API_DOCS}/upload`, { method: "POST", body: fd });
+      const res = await apiFetch(`${API_DOCS}/upload`, { method: "POST", body: fd });
       const data = await res.json();
       if (data.ok) { setDocs(p => [data.document, ...p]); setShowUpload(false); setUpFile(null); setUpDesc(""); }
     } catch (e) { console.error(e); } finally { setSaving(false); }
-  };
-
-  const handleDelete = async (id) => {
-    if (!window.confirm("Delete this document? This cannot be undone.")) return;
-    setDeleting(id);
-    try {
-      await fetch(`${API_DOCS}/${id}`, { method: "DELETE" });
-      setDocs(p => p.filter(d => d.id !== id));
-    } catch (e) { console.error(e); } finally { setDeleting(null); }
   };
 
   const fmtSize = (b) => b ? (b < 1024 ? `${b} B` : b < 1048576 ? `${(b/1024).toFixed(1)} KB` : `${(b/1048576).toFixed(1)} MB`) : "";
@@ -4141,61 +4718,151 @@ const DocsMod = ({ currentUser }) => {
           <div className="ph-title">Document Vault</div>
           <div className="ph-sub">Upload and manage letters, payslips, tax documents and policies</div>
         </div>
-        <button className="btn btn-p" onClick={() => setShowUpload(true)}><Icon n="plus" s={13}/> Upload Document</button>
+        <button className="btn btn-p" onClick={() => { setUpEmpId(selectedEmpId); setShowUpload(true); }}><Icon n="plus" s={13}/> Upload Document</button>
       </div>
 
+      {/* Stats — always based on the selected employee's docs */}
       <div className="sg">
         {[
-          { v: docs.length, l: "Total", s: "In vault", c: "#1B45F5" },
-          { v: docs.filter(d=>d.category==="Tax").length, l: "Tax Docs", s: "Form 16 etc.", c: "#B06010" },
-          { v: docs.filter(d=>d.category==="Payslip").length, l: "Payslips", s: "Salary slips", c: "#0F8C5A" },
-          { v: docs.filter(d=>d.category==="Policy").length, l: "Policies", s: "HR policies", c: "#5C35C2" },
+          { v: profileDocs.length, l: "Total", s: "In vault", c: "#1B45F5" },
+          { v: profileDocs.filter(d=>d.category==="Tax").length, l: "Tax Docs", s: "Form 16 etc.", c: "#B06010" },
+          { v: profileDocs.filter(d=>d.category==="Payslip").length, l: "Payslips", s: "Salary slips", c: "#0F8C5A" },
+          { v: profileDocs.filter(d=>d.category==="Policy").length, l: "Policies", s: "HR policies", c: "#5C35C2" },
         ].map((s,i) => (
           <div className="sc" key={i}><div className="sc-accent" style={{ background:s.c }}/><div className="sc-val" style={{ marginTop:10 }}>{s.v}</div><div className="sc-lbl">{s.l}</div><div className="sc-sub">{s.s}</div></div>
         ))}
       </div>
 
-      <div className="card">
-        <div className="ch">
-          <div className="ct"><Icon n="doc" s={14}/>All Documents</div>
-          <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-            {cats.map(c => <div key={c} className={`pill${catFil===c?" active":""}`} onClick={() => setCatFil(c)}>{c}</div>)}
+      {canManage ? (
+        /* Two-pane layout for HR/Director */
+        <div className="dir-pane">
+
+          {/* Left: Employee sidebar */}
+          <div className="card" style={{ padding:0, overflow:"hidden" }}>
+            <div style={{ padding:"10px 12px", borderBottom:"1px solid var(--brd)", background:"var(--raised)" }}>
+              <div className="fw6" style={{ fontSize:12, marginBottom:6 }}>Employees</div>
+              <input
+                className="finp"
+                style={{ fontSize:12, padding:"5px 8px", width:"100%", boxSizing:"border-box" }}
+                placeholder="Search…"
+                value={empSearch}
+                onChange={e => setEmpSearch(e.target.value)}
+              />
+            </div>
+            <div style={{ maxHeight:520, overflowY:"auto" }}>
+              {visibleEmps.map(u => {
+                const cnt = empDocCount(u.id);
+                const active = u.id === selectedEmpId;
+                return (
+                  <div
+                    key={u.id}
+                    onClick={() => { setSelectedEmpId(u.id); setCatFil("All"); }}
+                    style={{
+                      display:"flex", alignItems:"center", gap:9, padding:"9px 12px",
+                      borderBottom:"1px solid var(--brd)",
+                      background: active ? "var(--accent-soft)" : "transparent",
+                      cursor:"pointer", transition:"background .15s",
+                    }}
+                  >
+                    <div className="avt" style={{ width:30, height:30, fontSize:11, background:u.color, flexShrink:0 }}>
+                      {u.firstName?.[0]}{u.lastName?.[0]}
+                    </div>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div className="fw6" style={{ fontSize:12, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", color: active?"var(--accent)":"var(--ink)" }}>{u.name}</div>
+                      <div className="t3" style={{ fontSize:11 }}>{u.dept || u.department || ""}</div>
+                    </div>
+                    {cnt > 0 && <span className="bdg bdg-b" style={{ fontSize:10, flexShrink:0 }}>{cnt}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Right: Selected employee's documents */}
+          <div className="card" style={{ padding:0 }}>
+            {/* Profile header */}
+            {selectedEmp && (
+              <div style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", borderBottom:"1px solid var(--brd)", background:"var(--raised)" }}>
+                <div className="avt" style={{ width:38, height:38, fontSize:13, background:selectedEmp.color }}>
+                  {selectedEmp.firstName?.[0]}{selectedEmp.lastName?.[0]}
+                </div>
+                <div>
+                  <div className="fw7" style={{ fontSize:14 }}>{selectedEmp.name}</div>
+                  <div className="t3 tsm">{selectedEmp.id} · {selectedEmp.dept || selectedEmp.department || selectedEmp.designation || ""}</div>
+                </div>
+              </div>
+            )}
+            <div className="ch" style={{ borderBottom:"1px solid var(--brd)" }}>
+              <div className="ct" style={{ fontSize:13 }}><Icon n="doc" s={13}/>Documents</div>
+              <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                {cats.map(c => <div key={c} className={`pill${catFil===c?" active":""}`} onClick={() => setCatFil(c)} style={{ fontSize:12 }}>{c}</div>)}
+              </div>
+            </div>
+            <div style={{ padding:0 }}>
+              {loading && <div style={{ padding:"32px",textAlign:"center",color:"var(--ink4)" }}>Loading…</div>}
+              {!loading && filtered.length === 0 && (
+                <div style={{ padding:"48px 20px", textAlign:"center" }}>
+                  <div style={{ fontSize:32, marginBottom:12 }}>📂</div>
+                  <div style={{ fontWeight:600, marginBottom:6 }}>No documents yet</div>
+                  <div className="t3 tsm">Click "Upload Document" to add a document for {selectedEmp?.name || "this employee"}.</div>
+                </div>
+              )}
+              {!loading && filtered.map((d) => (
+                <div key={d.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderBottom:"1px solid var(--brd)" }}>
+                  <div style={{ width:34, height:34, borderRadius:"var(--r8)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, background:"var(--accent-soft)", flexShrink:0 }}>
+                    {DOC_ICONS[d.category] || "📎"}
+                  </div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div className="fw6" style={{ fontSize:13, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{d.original_name}</div>
+                    <div className="t3 tsm">{fmtSize(d.file_size)} · {fmtDate(d.created_at)}{d.description ? ` · ${d.description}` : ""}</div>
+                  </div>
+                  <span className="bdg bdg-b" style={{ flexShrink:0 }}>{d.category}</span>
+                  <a href={`${API_URL}/api/documents/${d.id}/view`} target="_blank" rel="noreferrer" className="btn btn-sm btn-p" style={{ textDecoration:"none", flexShrink:0 }}><Icon n="eye" s={12}/> View</a>
+                  <a href={`${API_URL}/api/documents/${d.id}/download`} target="_blank" rel="noreferrer" className="btn btn-sm" style={{ textDecoration:"none", flexShrink:0 }}>↓ Download</a>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-        <div style={{ padding:0 }}>
-          {loading && <div style={{ padding:"32px",textAlign:"center",color:"var(--ink4)" }}>Loading…</div>}
-          {!loading && filtered.length === 0 && (
-            <div style={{ padding:"48px 20px", textAlign:"center" }}>
-              <div style={{ fontSize:32, marginBottom:12 }}>📂</div>
-              <div style={{ fontWeight:600, marginBottom:6 }}>No documents yet</div>
-              <div className="t3 tsm">Click "Upload Document" to add the first one.</div>
+      ) : (
+        /* Single-pane for regular employees — own docs only */
+        <div className="card">
+          <div className="ch">
+            <div className="ct"><Icon n="doc" s={14}/>My Documents</div>
+            <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+              {cats.map(c => <div key={c} className={`pill${catFil===c?" active":""}`} onClick={() => setCatFil(c)}>{c}</div>)}
             </div>
-          )}
-          {!loading && filtered.map((d) => {
-            const empName = ALL_USERS.find(u => u.id === d.employee_id)?.name || d.employee_id;
-            return (
+          </div>
+          <div style={{ padding:0 }}>
+            {loading && <div style={{ padding:"32px",textAlign:"center",color:"var(--ink4)" }}>Loading…</div>}
+            {!loading && filtered.length === 0 && (
+              <div style={{ padding:"48px 20px", textAlign:"center" }}>
+                <div style={{ fontSize:32, marginBottom:12 }}>📂</div>
+                <div style={{ fontWeight:600, marginBottom:6 }}>No documents yet</div>
+                <div className="t3 tsm">Your HR team will upload documents here for you.</div>
+              </div>
+            )}
+            {!loading && filtered.map((d) => (
               <div key={d.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderBottom:"1px solid var(--brd)" }}>
                 <div style={{ width:36, height:36, borderRadius:"var(--r8)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, background:"var(--accent-soft)", flexShrink:0 }}>
                   {DOC_ICONS[d.category] || "📎"}
                 </div>
                 <div style={{ flex:1, minWidth:0 }}>
                   <div className="fw6" style={{ fontSize:13, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{d.original_name}</div>
-                  <div className="t3 tsm">{fmtSize(d.file_size)} · {fmtDate(d.created_at)}{canManage ? ` · ${empName}` : ""}{d.description ? ` · ${d.description}` : ""}</div>
+                  <div className="t3 tsm">{fmtSize(d.file_size)} · {fmtDate(d.created_at)}{d.description ? ` · ${d.description}` : ""}</div>
                 </div>
                 <span className="bdg bdg-b" style={{ flexShrink:0 }}>{d.category}</span>
                 <a href={`${API_URL}/api/documents/${d.id}/view`} target="_blank" rel="noreferrer" className="btn btn-sm btn-p" style={{ textDecoration:"none", flexShrink:0 }}><Icon n="eye" s={12}/> View</a>
                 <a href={`${API_URL}/api/documents/${d.id}/download`} target="_blank" rel="noreferrer" className="btn btn-sm" style={{ textDecoration:"none", flexShrink:0 }}>↓ Download</a>
-                {(canManage || d.uploaded_by === currentUser.id) && (
-                  <button className="btn btn-sm" style={{ color:"var(--red)", flexShrink:0 }} disabled={deleting===d.id} onClick={() => handleDelete(d.id)}>✕</button>
-                )}
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {showUpload && (
-        <Modal title="Upload Document" onClose={() => { setShowUpload(false); setUpFile(null); setUpDesc(""); }}
+        <Modal title={`Upload Document${canManage && selectedEmp ? ` — ${selectedEmp.name}` : ""}`}
+          onClose={() => { setShowUpload(false); setUpFile(null); setUpDesc(""); }}
           footer={<>
             <button className="btn btn-ghost" onClick={() => { setShowUpload(false); setUpFile(null); setUpDesc(""); }}>Cancel</button>
             <button className="btn btn-p" onClick={handleUpload} disabled={saving || !upFile}>{saving ? "Uploading…" : "Upload"}</button>
@@ -4249,7 +4916,7 @@ const AnnMod = ({ currentUser }) => {
 
   // Load from API
   useEffect(() => {
-    fetch(API_ANN)
+    apiFetch(API_ANN)
       .then(r => r.json())
       .then(data => setAnnouncements(data.announcements || []))
       .catch(() => {})
@@ -4268,14 +4935,14 @@ const AnnMod = ({ currentUser }) => {
     setSaving(true);
     try {
       if (form === "new") {
-        const res = await fetch(API_ANN, {
+        const res = await apiFetch(API_ANN, {
           method:"POST", headers:{"Content-Type":"application/json"},
           body:JSON.stringify({ ...formData, authorId:currentUser.id, authorName:currentUser.name }),
         });
         const data = await res.json();
         if (data.ok) setAnnouncements(p => [data.announcement, ...p]);
       } else {
-        const res = await fetch(`${API_ANN}/${form}`, {
+        const res = await apiFetch(`${API_ANN}/${form}`, {
           method:"PUT", headers:{"Content-Type":"application/json"},
           body:JSON.stringify(formData),
         });
@@ -4292,7 +4959,7 @@ const AnnMod = ({ currentUser }) => {
     if (!window.confirm("Delete this announcement? This cannot be undone.")) return;
     setDeleting(id);
     try {
-      await fetch(`${API_ANN}/${id}`, { method:"DELETE" });
+      await apiFetch(`${API_ANN}/${id}`, { method:"DELETE" });
       setAnnouncements(p => p.filter(a => a.id !== id));
       if (expanded === id) setExpanded(null);
     } catch (error) { console.error(error); } finally { setDeleting(null); }
@@ -4413,7 +5080,7 @@ const AnnMod = ({ currentUser }) => {
                 style={{ resize:"vertical", fontFamily:"inherit", lineHeight:1.6 }}
                 value={formData.body} onChange={e=>setFormData(p=>({...p,body:e.target.value}))}/>
             </div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <div className="g2" style={{ gap:10 }}>
               <div className="fgrp">
                 <div className="flbl">Category</div>
                 <select className="fsel" value={formData.category} onChange={e=>setFormData(p=>({...p,category:e.target.value}))}>
@@ -4499,39 +5166,29 @@ const PAGES = [
 // the backend API before handing off to HRApp. During loading it renders a
 // spinner; on error it renders a retry screen — both using GS styles.
 export default function AppBootstrap() {
-  // `ready` flips to true once all three API calls succeed.
-  const [ready, setReady] = useState(false);
-  // `error` holds a human-readable message shown on the server-unreachable screen.
-  const [error, setError] = useState(null);
+  // Show login first; bootstrap fires only after a valid token is in place.
+  const [authed, setAuthed] = useState(() => Boolean(getToken()));
+  const [ready, setReady]   = useState(false);
+  const [error, setError]   = useState(null);
 
+  // Run bootstrap only after the user has authenticated
   useEffect(() => {
-    // Fire four API calls simultaneously to minimise boot latency:
-    //   1. Full employee list (used everywhere)
-    //   2. Payroll salary structure (basic%, HRA%, etc.) — soft-fails to defaults
-    //   3. Admin-defined custom earning/deduction fields — soft-fails to empty list
-    //   4. Statutory deduction config (PF/ESI/PT/TDS rates) — soft-fails to null (engine uses built-in fallbacks)
+    if (!authed) return;
     Promise.all([
-      fetch(`${API_URL}/api/employees/all`).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
-      fetch(`${API_URL}/api/payroll/structure`).then(r => r.json()).catch(() => ({ structure: [] })),
-      fetch(`${API_URL}/api/payroll/field-configs`).then(r => r.json()).catch(() => ({ fieldConfigs: [] })),
-      fetch(`${API_URL}/api/payroll/statutory-config`).then(r => r.json()).catch(() => ({ statutoryConfig: [] })),
+      apiFetch(`${API_URL}/api/employees/all`).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+      apiFetch(`${API_URL}/api/payroll/structure`).then(r => r.json()).catch(() => ({ structure: [] })),
+      apiFetch(`${API_URL}/api/payroll/field-configs`).then(r => r.json()).catch(() => ({ fieldConfigs: [] })),
+      apiFetch(`${API_URL}/api/payroll/statutory-config`).then(r => r.json()).catch(() => ({ statutoryConfig: [] })),
     ])
       .then(([empData, structData, cfData, statData]) => {
-        // Populate the module-level globals and mirror them on window so that
-        // Vite HMR module re-evaluations (triggered by any file save) pick up
-        // the already-fetched data instead of starting back at the empty defaults.
         ALL_USERS = empData.employees;
         window.__HR_ALL_USERS__ = ALL_USERS;
 
-        // Merge DB salary structure rows over DEFAULT_STRUCTURE.
-        // If the DB has no rows (fresh install), APP_STRUCTURE stays null and
-        // calcPayroll falls back to DEFAULT_STRUCTURE automatically.
         const s = {};
         (structData.structure || []).forEach(row => { s[row.component_key] = parseFloat(row.value); });
         if (Object.keys(s).length) APP_STRUCTURE = { ...DEFAULT_STRUCTURE, ...s };
         window.__HR_APP_STRUCTURE__ = APP_STRUCTURE;
 
-        // Normalise custom field rows from snake_case DB columns to camelCase.
         APP_CUSTOM_FIELDS = (cfData.fieldConfigs || []).map(f => ({
           id: String(f.id), name: f.name, category: f.category,
           calcType: f.calc_type, value: parseFloat(f.value),
@@ -4539,8 +5196,6 @@ export default function AppBootstrap() {
         }));
         window.__HR_APP_CUSTOM_FIELDS__ = APP_CUSTOM_FIELDS;
 
-        // Build a flat key→value map from statutory config rows.
-        // JSON-valued keys (pt_slab_json, tds_slab_json) are parsed into arrays.
         if ((statData.statutoryConfig || []).length) {
           const sc = {};
           statData.statutoryConfig.forEach(row => {
@@ -4553,8 +5208,23 @@ export default function AppBootstrap() {
 
         setReady(true);
       })
-      .catch(() => setError("Could not connect to the server. Make sure the backend is running."));
-  }, []); // empty deps — runs once on mount
+      .catch((err) => {
+        if (err.message === "401") { clearToken(); setAuthed(false); }
+        else setError("Could not connect to the server. Make sure the backend is running.");
+      });
+  }, [authed]);
+
+  // ── Not logged in yet — show login screen ────────────────────────────────
+  if (!authed) {
+    return (
+      <><GS/>
+        <LoginScreen onLogin={(u) => {
+          localStorage.setItem("doloxe_user", JSON.stringify(u));
+          setAuthed(true);
+        }}/>
+      </>
+    );
+  }
 
   if (error) return (<><GS/><div className="login-wrap" style={{ flexDirection:"column", gap:16, textAlign:"center" }}><div style={{ fontSize:36 }}>⚠️</div><div style={{ fontFamily:"var(--display)", fontSize:18, fontWeight:700 }}>Server Unreachable</div><div style={{ color:"var(--ink3)", fontSize:13, maxWidth:340 }}>{error}</div><button className="btn btn-p" onClick={() => window.location.reload()}>Retry</button></div></>);
 
@@ -4587,7 +5257,7 @@ const ForceChangePassword = ({ currentUser, onChanged }) => {
     if (nw !== conf) { setErr("Passwords do not match."); return; }
     setLoading(true); setErr("");
     try {
-      const res = await fetch(`${API_URL}/api/auth/change-password`, {
+      const res = await apiFetch(`${API_URL}/api/auth/change-password`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ employeeId: currentUser.id, currentPassword: cur, newPassword: nw }),
       });
@@ -4685,7 +5355,7 @@ function HRApp() {
     if (cpNew !== cpConfirm) { setCpErr("New passwords do not match."); return; }
     setCpLoading(true); setCpErr("");
     try {
-      const res = await fetch(`${API_URL}/api/auth/change-password`, {
+      const res = await apiFetch(`${API_URL}/api/auth/change-password`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ employeeId: currentUser.id, currentPassword: cpCurrent, newPassword: cpNew }),
       });
@@ -4707,7 +5377,7 @@ function HRApp() {
   const loadNotifs = useCallback(async () => {
     if (!currentUser?.isHR && !(currentUser?.accessLevel >= 4)) return;
     try {
-      const r = await fetch(`${API_URL}/api/notifications?recipient_id=${currentUser.id}`);
+      const r = await apiFetch(`${API_URL}/api/notifications?recipient_id=${currentUser.id}`);
       const d = await r.json();
       setNotifs(d.notifications || []);
     } catch { /* network error — retain last state */ }
@@ -4717,8 +5387,8 @@ function HRApp() {
     if (!currentUser?.isHR && !(currentUser?.accessLevel >= 4)) return;
     try {
       const [lr, cr] = await Promise.all([
-        fetch(`${API_URL}/api/leaves?status=pending`).then(r => r.json()),
-        fetch(`${API_URL}/api/attendance/corrections?status=pending`).then(r => r.json()),
+        apiFetch(`${API_URL}/api/leaves?status=pending`).then(r => r.json()),
+        apiFetch(`${API_URL}/api/attendance/corrections?status=pending`).then(r => r.json()),
       ]);
       setPendingCounts({
         leaves: (lr.leaveRequests || []).length,
@@ -4791,15 +5461,28 @@ function HRApp() {
     // Always fetch fresh notifications when opening the panel so every
     // request submitted since the last poll is immediately visible.
     try {
-      const r = await fetch(`${API_URL}/api/notifications?recipient_id=${currentUser.id}`);
+      const r = await apiFetch(`${API_URL}/api/notifications?recipient_id=${currentUser.id}`);
       const d = await r.json();
       const fresh = d.notifications || [];
       setNotifs(fresh);
       if (fresh.some(n => !n.is_read)) {
-        await fetch(`${API_URL}/api/notifications/read-all?recipient_id=${currentUser.id}`, { method: "PUT" });
+        await apiFetch(`${API_URL}/api/notifications/read-all?recipient_id=${currentUser.id}`, { method: "PUT" });
         setNotifs(fresh.map(n => ({ ...n, is_read: true })));
       }
     } catch { /* ignore */ }
+  };
+
+  const clearNotifs = async () => {
+    try {
+      await apiFetch(`${API_URL}/api/notifications?recipient_id=${currentUser.id}`, { method: "DELETE" });
+      setNotifs([]);
+    } catch { /* ignore */ }
+  };
+
+  const handleNotifClick = (n) => {
+    const dest = n.type === "leave_request" ? "leaves" : "attendance";
+    setPage(dest);
+    setNotifOpen(false);
   };
 
   // Gate the whole app behind login: if no session, render the login screen.
@@ -4818,7 +5501,7 @@ function HRApp() {
   // Simple switch router — maps the active page key to the corresponding module component.
   const renderPage = () => {
     switch(page) {
-      case "dir":        return <DirectoryMod currentUser={currentUser}/>;
+      case "dir":        return <DirectoryMod currentUser={currentUser} onCurrentUserUpdate={u=>{ localStorage.setItem("doloxe_user",JSON.stringify(u)); setCurrentUser(u); }}/>;
       case "org":        return <OrgMod currentUser={currentUser}/>;
       case "attendance": return <AttendanceMod currentUser={currentUser}/>;
       case "leaves":     return <LeaveMod currentUser={currentUser}/>;
@@ -4828,7 +5511,7 @@ function HRApp() {
       case "salary":     return <SalaryMod currentUser={currentUser}/>;
       case "announce":   return <AnnMod currentUser={currentUser}/>;
       case "analytics":  return <AnalyticsMod currentUser={currentUser}/>;
-      default:           return <DirectoryMod currentUser={currentUser}/>;
+      default:           return <DirectoryMod currentUser={currentUser} onCurrentUserUpdate={u=>{ localStorage.setItem("doloxe_user",JSON.stringify(u)); setCurrentUser(u); }}/>;
     }
   };
 
@@ -4868,26 +5551,38 @@ function HRApp() {
                   )}
                 </div>
                 {notifOpen && (
-                  <div style={{ position:"absolute", right:0, top:"calc(100% + 10px)", width:360, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, boxShadow:"0 8px 32px rgba(0,0,0,0.15)", zIndex:1000, maxHeight:480, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+                  <div className="notif-panel" style={{ position:"absolute", right:0, top:"calc(100% + 10px)", width:360, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, boxShadow:"0 8px 32px rgba(0,0,0,0.15)", zIndex:1000, maxHeight:480, display:"flex", flexDirection:"column", overflow:"hidden" }}>
                     <div style={{ padding:"12px 16px", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
                       <span style={{ fontWeight:700, fontSize:14 }}>Notifications</span>
-                      <span style={{ fontSize:12, color:"var(--muted)" }}>
-                        {pendingTotal > 0
-                          ? [pendingCounts.leaves > 0 && `${pendingCounts.leaves} leave`, pendingCounts.corrections > 0 && `${pendingCounts.corrections} correction`].filter(Boolean).join(", ") + " pending"
-                          : unreadCount === 0 ? "All caught up" : `${unreadCount} unread`}
-                      </span>
+                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <span style={{ fontSize:12, color:"var(--muted)" }}>
+                          {pendingTotal > 0
+                            ? [pendingCounts.leaves > 0 && `${pendingCounts.leaves} leave`, pendingCounts.corrections > 0 && `${pendingCounts.corrections} correction`].filter(Boolean).join(", ") + " pending"
+                            : unreadCount === 0 ? "All caught up" : `${unreadCount} unread`}
+                        </span>
+                        {notifs.length > 0 && (
+                          <button onClick={clearNotifs} style={{ fontSize:11, color:"var(--muted)", background:"none", border:"none", cursor:"pointer", padding:"2px 6px", borderRadius:4, textDecoration:"underline" }}
+                            onMouseEnter={e=>e.currentTarget.style.color="var(--red)"}
+                            onMouseLeave={e=>e.currentTarget.style.color="var(--muted)"}>
+                            Clear all
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div style={{ overflowY:"auto", flex:1 }}>
                       {notifs.length === 0
                         ? <div style={{ padding:24, textAlign:"center", color:"var(--muted)", fontSize:13 }}>No notifications yet</div>
                         : notifs.map(n => (
-                          <div key={n.id} onClick={() => { setPage(n.type === "leave_request" ? "leave" : "attendance"); setNotifOpen(false); }}
+                          <div key={n.id} onClick={() => handleNotifClick(n)}
                             style={{ padding:"12px 16px", borderBottom:"1px solid var(--border)", cursor:"pointer", background: n.is_read ? "transparent" : "rgba(27,69,245,0.04)", transition:"background 0.15s" }}
                             onMouseEnter={e => e.currentTarget.style.background="var(--hover)"}
                             onMouseLeave={e => e.currentTarget.style.background = n.is_read ? "transparent" : "rgba(27,69,245,0.04)"}>
                             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
                               {!n.is_read && <span style={{ width:7, height:7, borderRadius:"50%", background:"var(--accent)", flexShrink:0 }}/>}
                               <span style={{ fontWeight:600, fontSize:13 }}>{n.title}</span>
+                              <span style={{ fontSize:10, color:"var(--muted)", marginLeft:"auto", whiteSpace:"nowrap" }}>
+                                {n.type === "leave_request" ? "→ Leaves" : "→ Attendance"}
+                              </span>
                             </div>
                             <div style={{ fontSize:12, color:"var(--muted)", marginLeft: n.is_read ? 0 : 15 }}>{n.message}</div>
                             <div style={{ fontSize:11, color:"var(--muted)", marginTop:4, marginLeft: n.is_read ? 0 : 15 }}>
@@ -4908,7 +5603,7 @@ function HRApp() {
                 <div className="tb-urole">{currentUser.role.split("/")[0].trim()}</div>
               </div>
             </div>
-            <button className="btn btn-sm" style={{ color:"var(--red)", borderColor:"rgba(200,49,42,0.2)", background:"var(--red-soft)", gap:5, fontWeight:650 }} onClick={()=>{ localStorage.removeItem("doloxe_user"); setCurrentUser(null); }}>
+            <button className="btn btn-sm" style={{ color:"var(--red)", borderColor:"rgba(200,49,42,0.2)", background:"var(--red-soft)", gap:5, fontWeight:650 }} onClick={()=>{ localStorage.removeItem("doloxe_user"); clearToken(); setCurrentUser(null); }}>
               <Icon n="logout" s={12}/><span className="sign-out-label">Sign Out</span>
             </button>
           </div>

@@ -17,16 +17,18 @@ FastAPI automatically:
   - returns HTTP 422 if any field fails validation
 """
 
-from datetime import date
+import json
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from jose import JWTError, jwt as jose_jwt
 import uvicorn
 
 UPLOADS_DIR = Path(__file__).parent / "uploads"
@@ -66,6 +68,11 @@ from db import (
     invalidate_reset_token,
     change_employee_password,
     verify_current_password,
+    create_employee,
+    update_employee,
+    rename_employee_id,
+    SELF_EDITABLE,
+    HR_EDITABLE,
     # payroll
     fetch_payroll_runs,
     fetch_payroll_structure,
@@ -125,16 +132,24 @@ from db import (
     fetch_notifications,
     mark_notification_read,
     mark_all_notifications_read,
+    clear_all_notifications,
     # goals
     fetch_goals,
     create_goal,
     update_goal,
     delete_goal,
+    # holidays
+    list_holidays,
+    add_holiday,
+    delete_holiday,
     # init
     init_database,
 )
 from mailer import send_otp_email, send_payslip_email
-from schemas import EmailLogOut, LoginRequest, LoginResponse, PayslipEmailRequest
+from schemas import (
+    EmailLogOut, LoginRequest, LoginResponse, PayslipEmailRequest,
+    EmployeeUpdateRequest, EmployeeCreateRequest,
+)
 
 
 # ── App instance ──────────────────────────────────────────────────────────────
@@ -162,6 +177,42 @@ app.add_middleware(
 
 
 
+# ── JWT auth ─────────────────────────────────────────────────────────────────
+# Paths that are accessible without a token (login, OTP flow, health check).
+_PUBLIC_PATHS = {
+    "/api/health",
+    "/api/auth/login",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
+    "/api/employees/all",
+    "/api/payroll/structure",
+    "/api/payroll/field-configs",
+    "/api/payroll/statutory-config",
+}
+
+def _create_token(employee_id: str, access_level: int, is_hr: bool) -> str:
+    payload = {
+        "sub": employee_id,
+        "lvl": access_level,
+        "hr":  is_hr,
+        "exp": datetime.utcnow() + timedelta(hours=settings.jwt_expire_hours),
+    }
+    return jose_jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path in _PUBLIC_PATHS:
+        return await call_next(request)
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"detail": "Not authenticated."})
+    try:
+        jose_jwt.decode(auth[7:], settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    except JWTError:
+        return JSONResponse(status_code=401, content={"detail": "Token invalid or expired. Please log in again."})
+    return await call_next(request)
+
+
 # ── Health check ─────────────────────────────────────────────────────────────
 # Called by the frontend AppBootstrap and monitoring tools to confirm the
 # server is up and which database dialect is being used (sqlite vs mssql).
@@ -184,6 +235,93 @@ def all_employees():
     return data
 
 
+@app.post("/api/employees")
+def create_employee_route(payload: EmployeeCreateRequest):
+    """HR / Director only — creates a new employee account."""
+    requestor = find_employee_by_id(payload.requestor_id)
+    if not requestor:
+        raise HTTPException(status_code=403, detail="Requestor not found.")
+    if not (requestor.get("isHR") or requestor.get("accessLevel", 0) >= 4):
+        raise HTTPException(status_code=403, detail="Only HR and Directors can create employees.")
+    data = payload.model_dump(exclude={"requestor_id"})
+    try:
+        new_emp = create_employee(data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _cache_bust("employees_all")
+    return {"ok": True, "employee": new_emp}
+
+
+@app.put("/api/employees/{employee_id}")
+def update_employee_route(employee_id: str, payload: EmployeeUpdateRequest):
+    """
+    Update an employee's profile fields.
+    - Any employee can update their own self-editable fields (phone, location, bank details, etc.).
+    - HR / Director (level >= 4) can update any employee's HR_EDITABLE fields.
+    - Manager (level >= 3) can rename any employee's ID via new_employee_id.
+    """
+    requestor = find_employee_by_id(payload.requestor_id)
+    if not requestor:
+        raise HTTPException(status_code=403, detail="Requestor not found.")
+
+    is_hr_or_director = requestor.get("isHR") or requestor.get("accessLevel", 0) >= 4
+    is_manager_or_above = requestor.get("accessLevel", 0) >= 3
+    is_self = requestor.get("id") == employee_id
+
+    if not is_self and not is_hr_or_director and not is_manager_or_above:
+        raise HTTPException(status_code=403, detail="You can only edit your own profile.")
+
+    updated = None
+    target_id = employee_id  # may change if employee_id is renamed
+
+    # Handle employee_id rename (Manager / Director / HR only)
+    new_emp_id = (payload.new_employee_id or "").strip().upper() if payload.new_employee_id else None
+    if new_emp_id and new_emp_id != employee_id:
+        if not is_manager_or_above:
+            raise HTTPException(status_code=403, detail="Only Managers and Directors can rename Employee IDs.")
+        try:
+            updated = rename_employee_id(employee_id, new_emp_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        target_id = new_emp_id
+
+    # Handle regular field updates
+    allowed_keys = HR_EDITABLE if is_hr_or_director else SELF_EDITABLE
+
+    raw = payload.model_dump(exclude={"requestor_id", "new_employee_id"}, exclude_none=True)
+    # Frontend only sends fields that actually changed (diff-based), so empty
+    # string here means the user intentionally cleared the field — keep it.
+    fields = {k: v for k, v in raw.items() if k in allowed_keys}
+
+    if not fields and updated is None:
+        raise HTTPException(status_code=400, detail="No updatable fields provided.")
+
+    if fields:
+        # Normalize nullable FK: empty string → None so the DB stores NULL, not ""
+        if "mgr_id" in fields and fields["mgr_id"] == "":
+            fields["mgr_id"] = None
+
+        # Parse date strings → date objects; empty string → None (clears the field)
+        from datetime import date as date_type
+        for date_col in ("dob", "date_of_joining"):
+            if date_col in fields and isinstance(fields[date_col], str):
+                if fields[date_col] == "":
+                    fields[date_col] = None
+                else:
+                    try:
+                        fields[date_col] = date_type.fromisoformat(fields[date_col])
+                    except ValueError:
+                        raise HTTPException(status_code=400, detail=f"Invalid date format for {date_col}.")
+
+        try:
+            updated = update_employee(target_id, fields)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    _cache_bust("employees_all")
+    return {"ok": True, "employee": updated}
+
+
 # ── Auth endpoints ────────────────────────────────────────────────────────────
 # Verifies the posted email + password against the stored PBKDF2 hash.
 # Returns 401 if the credentials are wrong — the frontend shows an error
@@ -193,7 +331,8 @@ def login(payload: LoginRequest):
     user = verify_login(payload.email, payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
-    return LoginResponse(ok=True, user=user)
+    token = _create_token(user["id"], user.get("accessLevel", 1), user.get("isHR", False))
+    return LoginResponse(ok=True, user=user, token=token)
 
 
 @app.post("/api/auth/forgot-password")
@@ -535,6 +674,59 @@ def send_payslip(payload: PayslipEmailRequest):
 # IMPORTANT: specific routes (corrections, clock-in, all/month) must be declared
 # BEFORE the wildcard /{employee_id} route — FastAPI matches in definition order.
 
+def _attendance_sessions(record):
+    if not record:
+        return []
+    legacy_session = [{"in": record.get("clock_in"), "out": record.get("clock_out") or None}] if record.get("clock_in") else []
+    if not record.get("notes"):
+        return legacy_session
+    try:
+        data = json.loads(record.get("notes") or "{}")
+        sessions = data.get("sessions", [])
+        return sessions if isinstance(sessions, list) else legacy_session
+    except Exception:
+        return legacy_session
+
+
+def _attendance_record_with_sessions(record, sessions):
+    if not record:
+        return None
+    saved = dict(record)
+    saved["notes"] = json.dumps({"sessions": sessions})
+    saved["hours_worked"] = _session_hours(sessions)
+    return saved
+
+
+def _parse_clock_time(value):
+    if not value:
+        return None
+    text = str(value).strip().upper()
+    for fmt in ("%I:%M %p", "%H:%M"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+    return None
+
+
+def _session_hours(sessions):
+    total = 0.0
+    for item in sessions:
+        start = _parse_clock_time(item.get("in"))
+        end = _parse_clock_time(item.get("out"))
+        if start and end:
+            minutes = (end - start).total_seconds() / 60
+            if minutes < 0:
+                minutes += 24 * 60
+            total += minutes / 60
+    return round(total, 2)
+
+
+def _today_attendance_record(employee_id):
+    today = date.today()
+    records = fetch_attendance_for_month(employee_id, today.year, today.month)
+    return next((r for r in records if r.get("date") == today.isoformat()), None)
+
 @app.get("/api/attendance/date-range")
 def get_attendance_date_range():
     """Returns the earliest and latest date for which attendance has been recorded."""
@@ -554,9 +746,21 @@ def clock_in(payload: dict):
     try:
         emp_id = payload["employeeId"]
         clock_time = payload.get("time")
-        status = payload.get("status", "present")
         today = date.today()
-        record = upsert_attendance(emp_id, today, status, clock_in=clock_time)
+        current = _today_attendance_record(emp_id)
+        sessions = _attendance_sessions(current)
+        open_session = next((s for s in reversed(sessions) if s.get("in") and not s.get("out")), None)
+        if open_session:
+            return {"ok": True, "record": _attendance_record_with_sessions(current, sessions)}
+        sessions.append({"in": clock_time, "out": None})
+        hours = _session_hours(sessions)
+        first_in = next((s.get("in") for s in sessions if s.get("in")), clock_time)
+        last_out = next((s.get("out") for s in reversed(sessions) if s.get("out")), "")
+        record = upsert_attendance(
+            emp_id, today, "present",
+            clock_in=first_in, clock_out=last_out, hours_worked=hours,
+            notes=json.dumps({"sessions": sessions}),
+        )
         return {"ok": True, "record": record}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -568,10 +772,20 @@ def clock_out(payload: dict):
     try:
         emp_id = payload["employeeId"]
         clock_time = payload.get("time")
-        hours = payload.get("hoursWorked")
-        status = payload.get("status", "present")
         today = date.today()
-        record = upsert_attendance(emp_id, today, status, clock_out=clock_time, hours_worked=hours)
+        current = _today_attendance_record(emp_id)
+        sessions = _attendance_sessions(current)
+        open_session = next((s for s in reversed(sessions) if s.get("in") and not s.get("out")), None)
+        if not open_session:
+            return {"ok": True, "record": _attendance_record_with_sessions(current, sessions)}
+        open_session["out"] = clock_time
+        hours = _session_hours(sessions)
+        first_in = next((s.get("in") for s in sessions if s.get("in")), current.get("clock_in") if current else None)
+        record = upsert_attendance(
+            emp_id, today, "present",
+            clock_in=first_in, clock_out=clock_time, hours_worked=hours,
+            notes=json.dumps({"sessions": sessions}),
+        )
         return {"ok": True, "record": record}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -644,6 +858,38 @@ def get_attendance(employee_id: str, year: int = Query(...), month: int = Query(
     return {"attendance": records}
 
 
+# ── Company Holidays endpoints ────────────────────────────────────────────────
+
+@app.get("/api/holidays")
+def get_holidays(year: int = Query(...)):
+    """Returns all company holidays for a given year."""
+    return {"holidays": list_holidays(year)}
+
+
+@app.post("/api/holidays")
+def create_holiday(payload: dict):
+    """HR adds a company holiday. Marks all employees as 'holiday' for that date."""
+    raw_date = payload.get("date")
+    name = (payload.get("name") or "").strip()
+    created_by = (payload.get("createdBy") or "").strip()
+    if not raw_date or not name:
+        raise HTTPException(status_code=422, detail="date and name are required.")
+    try:
+        from datetime import date as date_type
+        holiday_date = date_type.fromisoformat(raw_date)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid date format. Use YYYY-MM-DD.")
+    holiday = add_holiday(holiday_date, name, created_by)
+    return {"holiday": holiday}
+
+
+@app.delete("/api/holidays/{holiday_id}")
+def remove_holiday(holiday_id: int):
+    """HR removes a company holiday record."""
+    delete_holiday(holiday_id)
+    return {"ok": True}
+
+
 # ── Leave / Time-off endpoints ────────────────────────────────────────────────
 
 @app.get("/api/leaves")
@@ -694,16 +940,27 @@ def post_leave(payload: dict):
 
 @app.put("/api/leaves/{request_id}/approve")
 def approve_leave(request_id: int, payload: dict):
-    """HR/Manager approves a leave request and increments the employee's used balance."""
+    """HR/Manager approves a leave request, marks attendance for each working day, and increments used balance."""
     try:
         rec = update_leave_request_status(request_id, "approved", approved_by=payload.get("approvedBy"))
         if not rec:
             raise HTTPException(status_code=404, detail="Leave request not found.")
+        # Mark attendance as 'leave' for every Mon–Fri in the leave period
+        from_dt = date.fromisoformat(str(rec["from_date"])[:10])
+        to_dt   = date.fromisoformat(str(rec["to_date"])[:10])
+        cur = from_dt
+        while cur <= to_dt:
+            if cur.weekday() < 5:  # 0=Mon … 4=Fri
+                upsert_attendance(rec["employee_id"], cur, "leave")
+            cur += timedelta(days=1)
         today = date.today()
         fy_start = today.year if today.month >= 4 else today.year - 1
         fiscal_year = f"{fy_start}-{str(fy_start + 1)[-2:]}"
         increment_leave_used(rec["employee_id"], rec["leave_type"], int(rec["days"]), fiscal_year)
-        return {"ok": True, "leaveRequest": rec}
+        # Return updated balance so the frontend can refresh without a separate fetch
+        from db import fetch_leave_balances as _flb
+        balances = _flb(rec["employee_id"])
+        return {"ok": True, "leaveRequest": rec, "balances": balances}
     except HTTPException:
         raise
     except Exception as exc:
@@ -955,6 +1212,13 @@ def get_notifications(recipient_id: str = Query(...)):
 def read_all_notifs(recipient_id: str = Query(...)):
     """Marks all notifications as read for a recipient."""
     mark_all_notifications_read(recipient_id)
+    return {"ok": True}
+
+
+@app.delete("/api/notifications")
+def delete_all_notifs(recipient_id: str = Query(...)):
+    """Permanently clears all notifications for a recipient."""
+    clear_all_notifications(recipient_id)
     return {"ok": True}
 
 

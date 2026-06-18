@@ -16,6 +16,7 @@ mutation at runtime — treat them as read-only constants.
 
 from dataclasses import dataclass
 import os
+import secrets
 from urllib.parse import quote
 
 from env import load_env_file
@@ -61,6 +62,11 @@ class Settings:
     smtp_user: str   = os.getenv("SMTP_USER", "")
     smtp_pass: str   = os.getenv("SMTP_PASS", "")
     smtp_from: str   = os.getenv("SMTP_FROM", os.getenv("SMTP_USER", ""))
+
+    # JWT — set JWT_SECRET in production; dev gets a random key (tokens reset on restart)
+    jwt_secret:       str = os.getenv("JWT_SECRET", secrets.token_hex(32))
+    jwt_algorithm:    str = "HS256"
+    jwt_expire_hours: int = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
 
 
 # Singleton settings object imported everywhere in the app.

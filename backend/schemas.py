@@ -12,7 +12,7 @@ Why separate from db.py?
   Keeping them separate means you can change one without touching the other.
 """
 
-from typing import Any
+from typing import Any, Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
@@ -33,9 +33,12 @@ class LoginResponse(BaseModel):
     Successful login response.
     `user` is the full employee dict (same shape as ALL_USERS entries in the
     frontend) — the frontend stores this in React state as `currentUser`.
+    `token` is a signed JWT the frontend must send as `Authorization: Bearer <token>`
+    on every subsequent API request.
     """
     ok: bool
     user: dict[str, Any]
+    token: str
 
 
 # ── Payslip email ─────────────────────────────────────────────────────────────
@@ -76,6 +79,76 @@ class PayslipEmailRequest(BaseModel):
 
 
 # ── Email log output ──────────────────────────────────────────────────────────
+
+class EmployeeUpdateRequest(BaseModel):
+    """
+    PUT /api/employees/{employee_id} request body.
+    All fields are optional — only provided fields are written to the DB.
+    The route handler enforces which fields each access level may change.
+    """
+    # Self-editable by any employee on their own record
+    phone:          Optional[str] = None
+    location:       Optional[str] = None
+    gender:         Optional[str] = None
+    dob:            Optional[str] = None   # ISO date string "YYYY-MM-DD"
+    bank_name:      Optional[str] = None
+    bank_account_no: Optional[str] = None
+    ifsc:           Optional[str] = None
+    uan:            Optional[str] = None
+    pan:            Optional[str] = None
+    aadhaar:        Optional[str] = None
+    pf_account:     Optional[str] = None
+    # HR / Director only
+    first_name:     Optional[str] = None
+    middle_name:    Optional[str] = None
+    last_name:      Optional[str] = None
+    department:     Optional[str] = None
+    designation:    Optional[str] = None
+    email:          Optional[EmailStr] = None
+    annual_ctc_lpa: Optional[float] = None
+    emp_type:       Optional[str] = None
+    notice_period:  Optional[str] = None
+    mgr_id:         Optional[str] = None
+    access_level:   Optional[int] = None
+    is_hr:          Optional[bool] = None
+    date_of_joining: Optional[str] = None
+    is_active:      Optional[bool] = None
+    # Director/Manager (level ≥ 3) only — renames the primary key across all tables
+    new_employee_id: Optional[str] = None
+    # Caller identity — used by the route to authorise which fields to accept
+    requestor_id:   str = Field(..., min_length=1)
+
+
+class EmployeeCreateRequest(BaseModel):
+    """POST /api/employees request body. HR / Director only."""
+    first_name:      str = Field(..., min_length=1)
+    last_name:       str = Field(..., min_length=1)
+    middle_name:     Optional[str] = None
+    email:           EmailStr
+    department:      str = Field(..., min_length=1)
+    designation:     str = Field(..., min_length=1)
+    annual_ctc_lpa:  float = Field(..., ge=0)
+    password:        str = Field(..., min_length=6)
+    phone:           Optional[str] = None
+    location:        Optional[str] = None
+    gender:          Optional[str] = None
+    dob:             Optional[str] = None
+    date_of_joining: Optional[str] = None
+    emp_type:        Optional[str] = None
+    notice_period:   Optional[str] = None
+    mgr_id:          Optional[str] = None
+    access_level:    Optional[int] = 1
+    is_hr:           Optional[bool] = False
+    pan:             Optional[str] = None
+    aadhaar:         Optional[str] = None
+    uan:             Optional[str] = None
+    pf_account:      Optional[str] = None
+    bank_name:       Optional[str] = None
+    bank_account_no: Optional[str] = None
+    ifsc:            Optional[str] = None
+    # Caller identity — route uses this to verify HR / Director access
+    requestor_id:    str = Field(..., min_length=1)
+
 
 class EmailLogOut(BaseModel):
     """

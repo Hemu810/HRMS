@@ -4,11 +4,9 @@
 -- All IF NOT EXISTS guards make it safe to re-run.
 -- ============================================================
 
-IF DB_ID(N'DOLOXEHRMS') IS NULL
-  CREATE DATABASE DOLOXEHRMS;
-GO
 
-USE DOLOXEHRMS;
+
+USE DOLOXE_DEV;
 GO
 
 -- ── 1. employees ─────────────────────────────────────────────────────────────

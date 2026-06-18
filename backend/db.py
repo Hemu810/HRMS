@@ -99,13 +99,19 @@ _pool_kwargs = {} if IS_SQLITE else {
     "pool_recycle": 1800,   # recycle connections after 30 min to avoid MSSQL TCP timeouts
 }
 
+# pymssql needs explicit timeouts so a slow/unreachable MSSQL server doesn't
+# hang the process indefinitely. login_timeout covers the TCP connect+auth
+# phase; timeout covers individual query execution.
+_connect_args = (
+    {"check_same_thread": False} if IS_SQLITE
+    else {"login_timeout": 15, "timeout": 60}
+)
+
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=not IS_SQLITE,
     future=True,
-    # SQLite requires check_same_thread=False so the same connection can be
-    # reused across FastAPI's async worker threads.
-    connect_args={"check_same_thread": False} if IS_SQLITE else {},
+    connect_args=_connect_args,
     **_pool_kwargs,
 )
 
@@ -151,7 +157,6 @@ employees_table = Table(
     Column("access_level",   Integer, nullable=False, default=1),   # 1=Employee, 2=Lead, 3=Manager, 4=Director
     Column("is_hr",          Boolean, nullable=False, default=False),
     Column("is_finance_operator", Boolean, nullable=False, default=False),
-    Column("perf_score",     Numeric(4, 2)),   # 0.0 – 5.0 performance rating
     Column("password_hash",  String(200), nullable=False),
     Column("must_change_password", Boolean, nullable=False, default=True),  # forced on first login
     Column("is_active",      Boolean, nullable=False, default=True),
@@ -503,6 +508,17 @@ notifications_table = Table(
 )
 
 
+company_holidays_table = Table(
+    "company_holidays",
+    metadata,
+    Column("id", BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
+    Column("holiday_date", Date, nullable=False, unique=True),
+    Column("name", String(200), nullable=False),
+    Column("created_by", String(180), nullable=False),
+    Column("created_at", DateTime, nullable=False, default=datetime.utcnow),
+)
+
+
 goals_table = Table(
     "goals",
     metadata,
@@ -532,18 +548,6 @@ performance_reviews_table = Table(
     Column("review_date", Date,         nullable=True),
     Column("created_at",  DateTime,     nullable=False, default=datetime.utcnow),
 )
-
-employee_skills_table = Table(
-    "employee_skills",
-    metadata,
-    Column("id",          BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True),
-    Column("employee_id", String(20),   nullable=False),
-    Column("skill_name",  String(100),  nullable=False),
-    Column("score",       Float,        nullable=False),   # 1.0–5.0
-    Column("updated_by",  String(20),   nullable=True),    # employee_id of the person who set it
-    Column("updated_at",  DateTime,     nullable=False, default=datetime.utcnow),
-)
-
 
 # ── Serialisation helpers ─────────────────────────────────────────────────────
 
@@ -1436,18 +1440,27 @@ def fetch_employee_timesheets(employee_id: str):
 # ── Password reset / change queries ──────────────────────────────────────────
 
 def find_employee_by_id(employee_id: str):
-    """Returns a minimal employee dict (id, full_name, is_active) for auth flows, or None."""
+    """Returns a minimal employee dict for auth/permission checks, or None."""
     with engine.begin() as conn:
         row = conn.execute(
             select(
                 employees_table.c.employee_id,
                 employees_table.c.full_name,
                 employees_table.c.is_active,
+                employees_table.c.is_hr,
+                employees_table.c.access_level,
             ).where(employees_table.c.employee_id == employee_id)
         ).first()
     if not row:
         return None
-    return dict(row._mapping)
+    m = dict(row._mapping)
+    return {
+        "id": m["employee_id"],
+        "full_name": m["full_name"],
+        "is_active": m["is_active"],
+        "isHR": bool(m.get("is_hr")),
+        "accessLevel": int(m.get("access_level") or 1),
+    }
 
 
 def find_employee_by_email(email: str):
@@ -1689,6 +1702,15 @@ def mark_all_notifications_read(recipient_id: str):
         )
 
 
+def clear_all_notifications(recipient_id: str):
+    """Permanently deletes all notifications for a recipient."""
+    with engine.begin() as conn:
+        conn.execute(
+            sql_delete(notifications_table)
+            .where(notifications_table.c.recipient_id == recipient_id)
+        )
+
+
 # ── Goals ─────────────────────────────────────────────────────────────────────
 
 def fetch_goals(employee_id: str, quarter: str = None):
@@ -1786,63 +1808,92 @@ def update_review(review_id: int, **fields):
     return {k: serialize(v) for k, v in row._mapping.items()} if row else None
 
 
+# ── Company Holidays ──────────────────────────────────────────────────────────
+
+def list_holidays(year: int):
+    """Returns all company holidays for a given calendar year."""
+    from_date = date(year, 1, 1)
+    to_date = date(year, 12, 31)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(company_holidays_table)
+            .where(
+                (company_holidays_table.c.holiday_date >= from_date) &
+                (company_holidays_table.c.holiday_date <= to_date)
+            )
+            .order_by(company_holidays_table.c.holiday_date)
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def add_holiday(holiday_date: date, name: str, created_by: str):
+    """Inserts a company holiday and marks all employees as 'holiday' for that date."""
+    now = datetime.utcnow()
+    with engine.begin() as conn:
+        # Idempotent insert — skip if date already exists
+        existing = conn.execute(
+            select(company_holidays_table).where(
+                company_holidays_table.c.holiday_date == holiday_date
+            )
+        ).first()
+        if existing:
+            return {k: serialize(v) for k, v in existing._mapping.items()}
+        result = conn.execute(
+            insert(company_holidays_table).values(
+                holiday_date=holiday_date, name=name,
+                created_by=created_by, created_at=now,
+            )
+        )
+        row = conn.execute(
+            select(company_holidays_table).where(
+                company_holidays_table.c.id == result.inserted_primary_key[0]
+            )
+        ).first()
+        # Mark every employee as 'holiday' for that date
+        all_emps = conn.execute(
+            select(employees_table.c.employee_id)
+        ).fetchall()
+        for emp_row in all_emps:
+            emp_id = emp_row[0]
+            existing_att = conn.execute(
+                select(attendance_table).where(
+                    (attendance_table.c.employee_id == emp_id) &
+                    (attendance_table.c.date == holiday_date)
+                )
+            ).first()
+            if existing_att:
+                conn.execute(
+                    update(attendance_table)
+                    .where(
+                        (attendance_table.c.employee_id == emp_id) &
+                        (attendance_table.c.date == holiday_date)
+                    )
+                    .values(status="holiday", updated_at=now)
+                )
+            else:
+                conn.execute(
+                    insert(attendance_table).values(
+                        employee_id=emp_id, date=holiday_date, status="holiday",
+                        created_at=now, updated_at=now,
+                    )
+                )
+    return {k: serialize(v) for k, v in row._mapping.items()}
+
+
+def delete_holiday(holiday_id: int):
+    """Removes a company holiday record. Does not revert individual attendance rows."""
+    with engine.begin() as conn:
+        conn.execute(
+            sql_delete(company_holidays_table).where(company_holidays_table.c.id == holiday_id)
+        )
+
+
 def delete_review(review_id: int):
     with engine.begin() as conn:
         conn.execute(
             sql_delete(performance_reviews_table).where(
                 performance_reviews_table.c.id == review_id
             )
-        )
-
-
-# ── Employee Skills ───────────────────────────────────────────────────────────
-
-def fetch_skills(employee_id: str):
-    with engine.connect() as conn:
-        rows = conn.execute(
-            select(employee_skills_table)
-            .where(employee_skills_table.c.employee_id == employee_id)
-            .order_by(employee_skills_table.c.skill_name)
-        ).fetchall()
-    return rows_to_dicts(rows)
-
-
-def upsert_skill(employee_id: str, skill_name: str, score: float, updated_by: str):
-    with engine.begin() as conn:
-        existing = conn.execute(
-            select(employee_skills_table).where(
-                (employee_skills_table.c.employee_id == employee_id) &
-                (employee_skills_table.c.skill_name == skill_name)
-            )
-        ).first()
-        if existing:
-            conn.execute(
-                employee_skills_table.update()
-                .where(employee_skills_table.c.id == existing.id)
-                .values(score=score, updated_by=updated_by, updated_at=datetime.utcnow())
-            )
-            row_id = existing.id
-        else:
-            result = conn.execute(
-                employee_skills_table.insert().values(
-                    employee_id=employee_id,
-                    skill_name=skill_name,
-                    score=score,
-                    updated_by=updated_by,
-                    updated_at=datetime.utcnow(),
-                )
-            )
-            row_id = result.inserted_primary_key[0]
-        row = conn.execute(
-            select(employee_skills_table).where(employee_skills_table.c.id == row_id)
-        ).first()
-    return {k: serialize(v) for k, v in row._mapping.items()}
-
-
-def delete_skill(skill_id: int):
-    with engine.begin() as conn:
-        conn.execute(
-            sql_delete(employee_skills_table).where(employee_skills_table.c.id == skill_id)
         )
 
 
@@ -1937,4 +1988,329 @@ def fetch_attendance_date_range():
     return {
         "earliest": serialize(row.earliest) if row.earliest else None,
         "latest":   serialize(row.latest)   if row.latest   else None,
+    }
+
+
+# ── Employee create / update ───────────────────────────────────────────────────
+
+def _next_employee_id(conn) -> str:
+    """Computes the next EMP-XXXX employee_id by reading the current max."""
+    row = conn.execute(
+        select(func.max(employees_table.c.employee_id))
+    ).scalar()
+    if not row:
+        return "EMP-0001"
+    try:
+        num = int(row.split("-")[1]) + 1
+    except (IndexError, ValueError):
+        num = 1
+    return f"EMP-{num:04d}"
+
+
+def _avatar_colors():
+    return ["#1B45F5","#0F8C5A","#BE2B5A","#0A7E7A","#5C35C2","#B06010","#C8312A","#8B5CF6"]
+
+
+def create_employee(data: dict) -> dict:
+    """
+    Inserts a new employee row. `data` must include:
+      first_name, last_name, email, department, designation,
+      annual_ctc_lpa, password (plain-text, will be hashed).
+    All other fields are optional.
+
+    Returns the new employee in the same frontend-shaped dict as fetch_all_employees_full.
+    """
+    import random
+
+    first  = (data.get("first_name") or "").strip()
+    middle = (data.get("middle_name") or "").strip()
+    last   = (data.get("last_name") or "").strip()
+    parts  = [p for p in [first, middle, last] if p]
+    full   = " ".join(parts)
+
+    dob_val     = data.get("dob")
+    joining_val = data.get("date_of_joining")
+
+    with engine.begin() as conn:
+        emp_id = _next_employee_id(conn)
+        conn.execute(employees_table.insert().values(
+            employee_id=emp_id,
+            first_name=first,
+            middle_name=middle or None,
+            last_name=last,
+            full_name=full,
+            department=data["department"],
+            designation=data["designation"],
+            email=data["email"].lower().strip(),
+            phone=data.get("phone") or None,
+            location=data.get("location") or None,
+            date_of_joining=joining_val if joining_val else None,
+            dob=dob_val if dob_val else None,
+            gender=data.get("gender") or None,
+            color=data.get("color") or random.choice(_avatar_colors()),
+            mgr_id=data.get("mgr_id") or None,
+            pan=data.get("pan") or None,
+            aadhaar=data.get("aadhaar") or None,
+            uan=data.get("uan") or None,
+            pf_account=data.get("pf_account") or None,
+            esic=data.get("esic") or None,
+            bank_name=data.get("bank_name") or None,
+            bank_account_no=data.get("bank_account_no") or None,
+            ifsc=data.get("ifsc") or None,
+            annual_ctc_lpa=float(data.get("annual_ctc_lpa") or 0),
+            emp_type=data.get("emp_type") or "Full-time",
+            notice_period=data.get("notice_period") or None,
+            access_level=int(data.get("access_level") or 1),
+            is_hr=bool(data.get("is_hr") or False),
+            is_finance_operator=bool(data.get("is_finance_operator") or False),
+            password_hash=hash_password(data["password"]),
+            must_change_password=True,
+            is_active=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        ))
+        row = conn.execute(
+            select(employees_table).where(employees_table.c.employee_id == emp_id)
+        ).first()
+
+    e = dict(row._mapping)
+    dob = e.get("dob")
+    joining = e.get("date_of_joining")
+    return {
+        "id": e["employee_id"], "firstName": e["first_name"],
+        "middleName": e.get("middle_name") or "", "lastName": e["last_name"],
+        "name": e["full_name"], "dept": e["department"], "role": e["designation"],
+        "accessLevel": e["access_level"], "ctcLPA": float(e["annual_ctc_lpa"]),
+        "joining": joining.isoformat() if joining else None,
+        "color": e.get("color") or "#1B45F5",
+        "mgr": e.get("mgr_id"), "reports": [],
+        "loc": e.get("location") or "", "email": e["email"],
+        "phone": e.get("phone") or "",
+        "perf": 3.0,
+        "dob": dob.isoformat() if dob else None,
+        "age": _calc_age(dob), "gender": e.get("gender") or "",
+        "aadhaar": e.get("aadhaar") or "", "pan": e.get("pan") or "",
+        "empType": e.get("emp_type") or "Full-time",
+        "noticePeriod": e.get("notice_period") or "",
+        "bank": e.get("bank_name") or "", "accountNo": e.get("bank_account_no") or "",
+        "ifsc": e.get("ifsc") or "", "uan": e.get("uan") or "",
+        "pfAccount": e.get("pf_account") or "", "esic": e.get("esic") or "",
+        "isHR": bool(e.get("is_hr")),
+    }
+
+
+# ── rename_employee_id ────────────────────────────────────────────────────────
+
+# All (table, column) pairs that hold a FK reference to employees.employee_id.
+# Used by rename_employee_id to cascade the PK change to every child row.
+_EMPLOYEE_ID_FK_REFS = [
+    ("employees",               "mgr_id"),
+    ("payroll_runs",            "processed_by"),
+    ("payslips",                "employee_id"),
+    ("payroll_structure",       "updated_by"),
+    ("announcements",           "author_id"),
+    ("payroll_field_config",    "created_by"),
+    ("payslip_line_items",      "employee_id"),
+    ("password_reset_tokens",   "employee_id"),
+    ("attendance",              "employee_id"),
+    ("attendance_corrections",  "employee_id"),
+    ("leave_requests",          "employee_id"),
+    ("leave_balances",          "employee_id"),
+    ("time_log_entries",        "employee_id"),
+    ("timesheets",              "employee_id"),
+    ("documents",               "employee_id"),
+    ("documents",               "uploaded_by"),
+    ("payroll_statutory_config","updated_by"),
+]
+
+
+def rename_employee_id(old_id: str, new_id: str) -> dict:
+    """
+    Renames an employee's primary key and cascades the update to every
+    FK-referencing table inside a single transaction.
+
+    For MSSQL: temporarily disables FK constraint checking with NOCHECK so
+    the PK can be updated before child rows are updated, then re-validates.
+    For SQLite: FK enforcement is off by default so updates proceed directly.
+    """
+    import re
+    new_id = new_id.strip().upper()
+    if not re.match(r'^EMP-\d+$', new_id):
+        raise ValueError("Employee ID must follow the format EMP-XXXX (e.g., EMP-0042).")
+
+    # Unique list of table names for NOCHECK/CHECK (no duplicates — documents appears twice)
+    _all_tables = list(dict.fromkeys(t for t, _ in _EMPLOYEE_ID_FK_REFS))
+    s = "" if IS_SQLITE else "hrms."  # schema prefix
+
+    with engine.begin() as conn:
+        # Verify the target employee exists
+        if not conn.execute(
+            select(employees_table.c.employee_id).where(employees_table.c.employee_id == old_id)
+        ).first():
+            raise ValueError("Employee not found.")
+
+        if old_id == new_id:
+            row = conn.execute(
+                select(employees_table).where(employees_table.c.employee_id == old_id)
+            ).first()
+        else:
+            # Reject if the new ID is already taken
+            if conn.execute(
+                select(employees_table.c.employee_id).where(employees_table.c.employee_id == new_id)
+            ).first():
+                raise ValueError(f"Employee ID '{new_id}' is already in use.")
+
+            if not IS_SQLITE:
+                # Disable FK enforcement on every referencing table + employees itself
+                for tbl in _all_tables + ["employees"]:
+                    conn.execute(text(f"ALTER TABLE {s}{tbl} NOCHECK CONSTRAINT ALL"))
+
+            # Update the PK
+            conn.execute(text(
+                f"UPDATE {s}employees SET employee_id = :n WHERE employee_id = :o"
+            ), {"n": new_id, "o": old_id})
+
+            # Cascade to every FK column
+            for tbl, col in _EMPLOYEE_ID_FK_REFS:
+                conn.execute(text(
+                    f"UPDATE {s}{tbl} SET {col} = :n WHERE {col} = :o"
+                ), {"n": new_id, "o": old_id})
+
+            if not IS_SQLITE:
+                # Re-enable and validate FK constraints
+                for tbl in _all_tables + ["employees"]:
+                    conn.execute(text(
+                        f"ALTER TABLE {s}{tbl} WITH CHECK CHECK CONSTRAINT ALL"
+                    ))
+
+            row = conn.execute(
+                select(employees_table).where(employees_table.c.employee_id == new_id)
+            ).first()
+
+    if not row:
+        raise ValueError("Employee not found after rename.")
+
+    e = dict(row._mapping)
+    dob = e.get("dob")
+    joining = e.get("date_of_joining")
+
+    with engine.begin() as conn:
+        report_rows = conn.execute(
+            select(employees_table.c.employee_id).where(employees_table.c.mgr_id == new_id)
+        ).fetchall()
+    reports = [r._mapping["employee_id"] for r in report_rows]
+
+    return {
+        "id": e["employee_id"], "firstName": e["first_name"],
+        "middleName": e.get("middle_name") or "", "lastName": e["last_name"],
+        "name": e["full_name"], "dept": e["department"], "role": e["designation"],
+        "accessLevel": e["access_level"], "ctcLPA": float(e["annual_ctc_lpa"]),
+        "joining": joining.isoformat() if joining else None,
+        "color": e.get("color") or "#1B45F5",
+        "mgr": e.get("mgr_id"), "reports": reports,
+        "loc": e.get("location") or "", "email": e["email"],
+        "phone": e.get("phone") or "",
+        "perf": float(e["perf_score"]) if e.get("perf_score") else 3.0,
+        "dob": dob.isoformat() if dob else None,
+        "age": _calc_age(dob), "gender": e.get("gender") or "",
+        "aadhaar": e.get("aadhaar") or "", "pan": e.get("pan") or "",
+        "empType": e.get("emp_type") or "Full-time",
+        "noticePeriod": e.get("notice_period") or "",
+        "bank": e.get("bank_name") or "", "accountNo": e.get("bank_account_no") or "",
+        "ifsc": e.get("ifsc") or "", "uan": e.get("uan") or "",
+        "pfAccount": e.get("pf_account") or "", "esic": e.get("esic") or "",
+        "isHR": bool(e.get("is_hr")),
+    }
+
+
+# Fields an employee can update on their own record.
+SELF_EDITABLE = {
+    "phone", "location", "gender", "dob",
+    "bank_name", "bank_account_no", "ifsc", "uan", "pan", "aadhaar", "pf_account",
+}
+
+# Additional fields HR / Director can update on any record.
+HR_EDITABLE = SELF_EDITABLE | {
+    "first_name", "middle_name", "last_name",
+    "department", "designation", "email",
+    "annual_ctc_lpa", "emp_type", "notice_period",
+    "mgr_id", "access_level", "is_hr",
+    "date_of_joining", "is_active",
+}
+
+
+def update_employee(employee_id: str, fields: dict) -> dict:
+    """
+    Updates an employee row. `fields` should only contain DB column names
+    that the caller has already permission-checked. Returns the updated
+    employee in frontend-shaped dict (same as fetch_all_employees_full).
+    """
+    if not fields:
+        raise ValueError("No fields to update.")
+
+    update_vals = {k: v for k, v in fields.items()}
+
+    # Recompute full_name if any name part changes.
+    name_keys = {"first_name", "middle_name", "last_name"}
+    if name_keys & set(update_vals):
+        with engine.begin() as conn:
+            row = conn.execute(
+                select(employees_table).where(employees_table.c.employee_id == employee_id)
+            ).first()
+        if not row:
+            raise ValueError("Employee not found.")
+        cur = dict(row._mapping)
+        fn = update_vals.get("first_name",  cur["first_name"])
+        mn = update_vals.get("middle_name", cur.get("middle_name") or "")
+        ln = update_vals.get("last_name",   cur["last_name"])
+        parts = [p for p in [fn, mn, ln] if p]
+        update_vals["full_name"] = " ".join(parts)
+
+    update_vals["updated_at"] = datetime.utcnow()
+
+    with engine.begin() as conn:
+        conn.execute(
+            employees_table.update()
+            .where(employees_table.c.employee_id == employee_id)
+            .values(**update_vals)
+        )
+        row = conn.execute(
+            select(employees_table).where(employees_table.c.employee_id == employee_id)
+        ).first()
+
+    if not row:
+        raise ValueError("Employee not found after update.")
+
+    e = dict(row._mapping)
+    dob = e.get("dob")
+    joining = e.get("date_of_joining")
+
+    with engine.begin() as conn:
+        report_rows = conn.execute(
+            select(employees_table.c.employee_id).where(
+                employees_table.c.mgr_id == employee_id
+            )
+        ).fetchall()
+    reports = [r._mapping["employee_id"] for r in report_rows]
+
+    return {
+        "id": e["employee_id"], "firstName": e["first_name"],
+        "middleName": e.get("middle_name") or "", "lastName": e["last_name"],
+        "name": e["full_name"], "dept": e["department"], "role": e["designation"],
+        "accessLevel": e["access_level"], "ctcLPA": float(e["annual_ctc_lpa"]),
+        "joining": joining.isoformat() if joining else None,
+        "color": e.get("color") or "#1B45F5",
+        "mgr": e.get("mgr_id"), "reports": reports,
+        "loc": e.get("location") or "", "email": e["email"],
+        "phone": e.get("phone") or "",
+        "perf": float(e["perf_score"]) if e.get("perf_score") else 3.0,
+        "dob": dob.isoformat() if dob else None,
+        "age": _calc_age(dob), "gender": e.get("gender") or "",
+        "aadhaar": e.get("aadhaar") or "", "pan": e.get("pan") or "",
+        "empType": e.get("emp_type") or "Full-time",
+        "noticePeriod": e.get("notice_period") or "",
+        "bank": e.get("bank_name") or "", "accountNo": e.get("bank_account_no") or "",
+        "ifsc": e.get("ifsc") or "", "uan": e.get("uan") or "",
+        "pfAccount": e.get("pf_account") or "", "esic": e.get("esic") or "",
+        "isHR": bool(e.get("is_hr")),
     }
