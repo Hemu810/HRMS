@@ -532,6 +532,12 @@ const GS = () => (
     .att-future  { background: transparent; color: var(--ink5); border-color: var(--brd); }
     .att-grid    { display: grid; grid-template-columns: repeat(7,1fr); gap: 5px; }
 
+    /* Pulsing dot for the "Active" status pill in State B */
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.4; transform: scale(0.75); }
+    }
+
     /* Clock-in / out button — toggles between blue (idle) → green (in) → red (out) */
     .reg-btn {
       padding: 12px 20px; border-radius: var(--r10);
@@ -1291,6 +1297,13 @@ const AttendanceMod = ({ currentUser }) => {
   const [holForm, setHolForm] = useState({ date:"", name:"" });
   const [holError, setHolError] = useState("");
   const [holSaving, setHolSaving] = useState(false);
+  // Live elapsed display for State B of the Smart Attendance Card — ticks every second
+  const [liveElapsed, setLiveElapsed] = useState("");
+  // Button processing states — prevent double-click by disabling visually while the API call is in-flight
+  const [clockingIn, setClockingIn] = useState(false);
+  const [clockingOut, setClockingOut] = useState(false);
+  // Exact duration (ms) of the just-completed shift, captured at clock-out for State C's summary
+  const [lastShiftMs, setLastShiftMs] = useState(null);
 
   const canViewTeam = hasTeamReports(currentUser) || canViewAttendanceReports(currentUser);
   const canViewReports = canViewAttendanceReports(currentUser);
@@ -1366,6 +1379,9 @@ const AttendanceMod = ({ currentUser }) => {
         clocks[id] = byDateClock;
       });
       const myToday = results.find(r => r.id === currentUser.id)?.records.find(rec => rec.date === todayStr);
+      // Re-derived from the server on every month switch — the "just completed" transient
+      // summary (State C) should never resurrect from a stale local value.
+      setLastShiftMs(null);
       if (myToday) {
         const savedIn = myToday.clock_in || myToday.clockIn || null;
         const savedOut = myToday.clock_out || myToday.clockOut || null;
@@ -1432,6 +1448,30 @@ const AttendanceMod = ({ currentUser }) => {
       .finally(() => setHolidaysLoading(false));
   }, [yr]);
 
+  useEffect(() => {
+    if (!checkedIn || !checkInDateRef.current) { setLiveElapsed(""); return; }
+    const update = () => {
+      const secs = Math.max(0, Math.floor((new Date() - checkInDateRef.current) / 1000));
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = secs % 60;
+      setLiveElapsed(`${h}h ${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}s`);
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [checkedIn]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Formats an exact duration (ms) as "X hours, Y minutes" — falls back to seconds when the
+  // whole shift was under a minute, so very short sessions still show a non-zero duration.
+  const fmtExactDuration = (ms) => {
+    const totalSeconds = Math.max(0, Math.round(ms / 1000));
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    return h > 0 || m > 0 ? `${h} hours, ${m} minutes` : `${h} hours, ${m} minutes, ${s} seconds`;
+  };
+
   const countWorkDays = (y, m) => {
     const days = new Date(y, m, 0).getDate();
     let n = 0;
@@ -1454,12 +1494,15 @@ const AttendanceMod = ({ currentUser }) => {
 
   const myStats = getMonthStats(myAtt);
   const totalWorkedHours = sumSessionHours(timeLogs);
+
   const handleCheckIn = async () => {
-    if (clockBusyRef.current || checkedIn) return;
+    if (clockBusyRef.current || checkedIn || clockingIn) return;
     clockBusyRef.current = true;
+    setClockingIn(true); // disable button immediately — prevents double-click
     const now = new Date();
     const t = now.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
     checkInDateRef.current = now;
+    setLastShiftMs(null);
     setCheckedIn(true); setCheckInTime(t); setCheckOutTime(null);
     setTimeLogs(prev => [...prev, { in:t, out:null }]);
     setAttendance(prev => ({ ...prev, [currentUser.id]: { ...(prev[currentUser.id]||{}), [todayStr]: "present" } }));
@@ -1472,21 +1515,22 @@ const AttendanceMod = ({ currentUser }) => {
       const savedLogs = parseSessionLogs(data.record?.notes);
       if (res.ok && savedLogs.length) setTimeLogs(savedLogs);
     } catch { /* fire-and-forget */ }
-    finally { clockBusyRef.current = false; }
+    finally { clockBusyRef.current = false; setClockingIn(false); }
   };
   const handleCheckOut = async () => {
-    if (clockBusyRef.current || !checkedIn || !checkInDateRef.current) return;
+    // No minimum-duration restriction — clock-out is allowed at any time, even seconds after clock-in.
+    if (clockBusyRef.current || !checkedIn || !checkInDateRef.current || clockingOut) return;
     clockBusyRef.current = true;
+    setClockingOut(true); // disable button immediately — prevents double-click
     const now = new Date();
     const t = now.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
-    const hoursWorked = checkInDateRef.current
-      ? (now - checkInDateRef.current) / 3600000
-      : null;
+    const exactMs = now - checkInDateRef.current;
+    const hoursWorked = exactMs / 3600000;
     const activeLogs = timeLogs.length ? timeLogs : [{ in:checkInTime, out:null }];
     const nextLogs = activeLogs.map((session, index) => index === activeLogs.length - 1 && session.in && !session.out ? { ...session, out:t } : session);
     const status = "present";
     setTimeLogs(nextLogs);
-    setCheckOutTime(t); setCheckedIn(false);
+    setCheckOutTime(t); setCheckedIn(false); setLastShiftMs(exactMs);
     setAttendance(prev => ({ ...prev, [currentUser.id]: { ...(prev[currentUser.id]||{}), [todayStr]: status } }));
     try {
       const res = await apiFetch(`${API_URL}/api/attendance/clock-out`, {
@@ -1497,7 +1541,7 @@ const AttendanceMod = ({ currentUser }) => {
       const savedLogs = parseSessionLogs(data.record?.notes);
       if (res.ok && savedLogs.length) setTimeLogs(savedLogs);
     } catch { /* fire-and-forget */ }
-    finally { clockBusyRef.current = false; }
+    finally { clockBusyRef.current = false; setClockingOut(false); }
   };
 
   const attClass = (st) => {
@@ -1640,7 +1684,7 @@ const AttendanceMod = ({ currentUser }) => {
 
   return (
     <div>
-      <div className="ph">
+      <div className="ph" style={{ marginBottom:14 }}>
         <div>
           <div className="ph-eyebrow">People</div>
           <div className="ph-title">Attendance</div>
@@ -1657,60 +1701,162 @@ const AttendanceMod = ({ currentUser }) => {
         </div>
       </div>
 
-      <div className="g2" style={{ gap:14, marginBottom:18 }}>
-        <div className="card" style={{ marginBottom:0 }}>
-          <div className="ch"><div className="ct"><Icon n="clockin" s={14}/>Today — {new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"})}</div>{attBadge(attendance[currentUser.id]?.[todayStr])}</div>
-          <div className="cb">
-            {(() => { const isOnLeave = attendance[currentUser.id]?.[todayStr] === "leave"; return (<>
-            {isOnLeave && (
-              <div style={{ marginBottom:12, padding:"10px 12px", background:"var(--accent-soft)", border:"1px solid rgba(37,99,235,0.2)", borderRadius:"var(--r8)", fontSize:12, color:"var(--accent)", display:"flex", alignItems:"center", gap:8 }}>
-                <Icon n="leave" s={13}/> You are on approved leave today — clock-in is not required.
+      {/* ── Smart Attendance Card + Monthly Stats — kept compact so the daily log table below sits higher ── */}
+      <div className="g2" style={{ gap:12, marginBottom:10 }}>
+
+        {/* ── LEFT: Smart Attendance Card (3 conditional states) ── */}
+        {(() => {
+          const isOnLeave = attendance[currentUser.id]?.[todayStr] === "leave";
+          const isHoliday = attendance[currentUser.id]?.[todayStr] === "holiday";
+          const hour = new Date().getHours();
+          const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+          const firstName = currentUser.firstName || currentUser.name?.split(" ")[0] || "there";
+          // Determine state: A=ready to clock in, B=working, C=just finished a session.
+          // C is gated on lastShiftMs (set only by an in-session clock-out), not on the
+          // persisted checkOutTime — so a page reload never gets stuck on the old summary,
+          // and employees can start as many clock-in/out sessions as they want per day.
+          const stateB = checkedIn;
+          const stateC = !checkedIn && lastShiftMs != null;
+          const stateA = !stateB && !stateC;
+          const sessionNum = timeLogs.length || 1;
+          return (
+            <div className="card" style={{ marginBottom:0 }}>
+              {/* Card header — always shows date + today's status badge */}
+              <div className="ch">
+                <div className="ct"><Icon n="clockin" s={14}/>Today — {new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"})}</div>
+                {attBadge(attendance[currentUser.id]?.[todayStr])}
               </div>
-            )}
-            <div className="g3" style={{ marginBottom:14 }}>
-              {[{ l:"Clock-in", v:checkInTime||"—:——", c:"var(--green)" },{ l:"Clock-out", v:checkOutTime||"—:——", c:"var(--red)" },{ l:"Hours", v:checkedIn?`${fmtHours(totalWorkedHours)} + ongoing`:fmtHours(totalWorkedHours), c:"var(--accent)" }].map(s=>(
-                <div key={s.l} style={{ textAlign:"center", padding:"10px 6px", background:"var(--raised)", borderRadius:"var(--r8)", border:"1px solid var(--brd)" }}>
-                  <div style={{ fontSize:10.5, color:"var(--ink3)", marginBottom:3 }}>{s.l}</div>
-                  <div style={{ fontFamily:"var(--mono)", fontWeight:700, fontSize:13.5, color:s.c }}>{s.v}</div>
-                </div>
-              ))}
-            </div>
-            <div className="g2" style={{ gap:8 }}>
-              <button className="reg-btn" onClick={handleCheckIn} disabled={checkedIn || isOnLeave}>Clock In</button>
-              <button className="reg-btn checked-in" onClick={handleCheckOut} disabled={!checkedIn || isOnLeave}>Clock Out</button>
-            </div>
-            {!isOnLeave && (
-              <div style={{ marginTop:12, background:"var(--raised)", border:"1px solid var(--brd)", borderRadius:"var(--r8)", padding:"10px 12px" }}>
-                <div style={{ display:"flex", justifyContent:"space-between", gap:8, marginBottom:6 }}>
-                  <div className="t3 tsm">{checkedIn ? `Active since ${checkInTime}` : checkOutTime ? "Last session closed" : "No active session"}</div>
-                  <div className="mono fw7" style={{ color:"var(--accent)", fontSize:12 }}>{fmtHours(totalWorkedHours)}</div>
-                </div>
-                {timeLogs.length ? timeLogs.slice(-3).map((log,i)=>(
-                  <div key={`${log.in}-${i}`} style={{ display:"flex", justifyContent:"space-between", fontSize:11.5, color:"var(--ink3)", paddingTop:4 }}>
-                    <span>Session {Math.max(1, timeLogs.length - 2 + i)}</span>
-                    <span className="mono">{log.in || "—"} → {log.out || "ongoing"}</span>
+              <div className="cb" style={{ padding:"12px 14px" }}>
+
+                {/* Leave / Holiday override banner */}
+                {(isOnLeave || isHoliday) && (
+                  <div style={{ padding:"10px 12px", background:"var(--accent-soft)", border:"1px solid rgba(37,99,235,0.2)", borderRadius:"var(--r8)", fontSize:12.5, color:"var(--accent)", display:"flex", alignItems:"center", gap:8 }}>
+                    <Icon n="leave" s={13}/>
+                    {isOnLeave ? "You are on approved leave today — clock-in is not required." : "Today is a public holiday — enjoy your day off!"}
                   </div>
-                )) : <div className="t3 tsm">Clock in to start your first session.</div>}
+                )}
+
+                {/* ── STATE A: Not clocked in yet — welcome message + full-width blue Clock In button ── */}
+                {!isOnLeave && !isHoliday && stateA && (
+                  <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                    <div style={{ textAlign:"center", padding:"8px 12px 4px" }}>
+                      <div style={{ fontSize:20, marginBottom:4 }}>👋</div>
+                      <div style={{ fontWeight:700, fontSize:14.5, color:"var(--ink)", marginBottom:3 }}>{greeting}, {firstName}!</div>
+                      <div style={{ fontSize:12.5, color:"var(--ink3)" }}>
+                        {timeLogs.length ? "Ready for another session? Clock in anytime." : "Ready to start your day? Clock in to begin."}
+                      </div>
+                    </div>
+                    {/* Button is disabled immediately on first click while the API call is in-flight */}
+                    <button
+                      className="reg-btn"
+                      onClick={handleCheckIn}
+                      disabled={clockingIn}
+                      style={{ opacity: clockingIn ? 0.65 : 1, cursor: clockingIn ? "not-allowed" : "pointer", transition:"all 0.18s" }}
+                    >
+                      {clockingIn ? "Starting shift…" : "Clock In"}
+                    </button>
+                  </div>
+                )}
+
+                {/* ── STATE B: Currently clocked in / working — no minimum-duration lock; Clock Out is always enabled ── */}
+                {!isOnLeave && !isHoliday && stateB && (
+                  <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                    {/* Active status pill */}
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <span style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", background:"var(--green-soft)", border:"1px solid rgba(5,150,105,0.25)", borderRadius:20, fontSize:11.5, color:"var(--green)", fontWeight:700 }}>
+                        <span style={{ width:7, height:7, borderRadius:"50%", background:"var(--green)", display:"inline-block", animation:"pulse-dot 1.4s ease-in-out infinite" }}/>
+                        Active
+                      </span>
+                      <span style={{ fontSize:11.5, color:"var(--ink3)" }}>Clocked in at <span style={{ fontFamily:"var(--mono)", fontWeight:700, color:"var(--green)" }}>{checkInTime}</span></span>
+                      <span style={{ fontSize:11.5, color:"var(--ink4)" }}>· Session {sessionNum}</span>
+                    </div>
+                    {/* Live elapsed counter — ticks every second, shows exact h/m/s with no floor */}
+                    <div style={{ background:"var(--raised)", border:"1px solid var(--brd)", borderRadius:"var(--r8)", padding:"10px 14px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <div style={{ fontSize:11.5, color:"var(--ink3)" }}>Time Elapsed</div>
+                      <div style={{ fontFamily:"var(--mono)", fontWeight:800, fontSize:18, color:"var(--accent)" }}>{liveElapsed || "0h 00m 00s"}</div>
+                    </div>
+                    {/* Clock Out is a single, always-enabled amber/red button — clickable at any time */}
+                    <button
+                      className="reg-btn checked-in"
+                      style={{ background:"var(--amber-soft)", borderColor:"var(--amber)", color:"var(--amber)", opacity: clockingOut ? 0.65 : 1, cursor: clockingOut ? "not-allowed" : "pointer", transition:"all 0.18s" }}
+                      onClick={handleCheckOut}
+                      disabled={clockingOut}
+                    >
+                      {clockingOut ? "Processing…" : "Clock Out"}
+                    </button>
+                  </div>
+                )}
+
+                {/* ── STATE C: Session completed — transient summary, not an end-of-day lock ── */}
+                {!isOnLeave && !isHoliday && stateC && (
+                  <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                    <div style={{ display:"flex", alignItems:"flex-start", gap:12, padding:"12px 14px", background:"var(--green-soft)", border:"1px solid rgba(5,150,105,0.25)", borderRadius:"var(--r8)" }}>
+                      <div style={{ width:32, height:32, borderRadius:"50%", background:"var(--green)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                        <span style={{ color:"#fff", fontSize:16, lineHeight:1 }}>✓</span>
+                      </div>
+                      <div>
+                        <div style={{ fontWeight:700, fontSize:13.5, color:"var(--green)", marginBottom:3 }}>Shift completed successfully!</div>
+                        <div style={{ fontSize:12, color:"var(--ink3)" }}>Total logged time: <span style={{ fontFamily:"var(--mono)", fontWeight:700, color:"var(--ink)" }}>{fmtExactDuration(lastShiftMs)}</span></div>
+                      </div>
+                    </div>
+                    <div style={{ display:"flex", gap:8 }}>
+                      <div style={{ flex:1, textAlign:"center", padding:"8px 6px", background:"var(--raised)", borderRadius:"var(--r8)", border:"1px solid var(--brd)" }}>
+                        <div style={{ fontSize:10, color:"var(--ink3)", marginBottom:2 }}>Clocked In</div>
+                        <div style={{ fontFamily:"var(--mono)", fontWeight:700, fontSize:12.5, color:"var(--green)" }}>{checkInTime}</div>
+                      </div>
+                      <div style={{ flex:1, textAlign:"center", padding:"8px 6px", background:"var(--raised)", borderRadius:"var(--r8)", border:"1px solid var(--brd)" }}>
+                        <div style={{ fontSize:10, color:"var(--ink3)", marginBottom:2 }}>Clocked Out</div>
+                        <div style={{ fontFamily:"var(--mono)", fontWeight:700, fontSize:12.5, color:"var(--red)" }}>{checkOutTime}</div>
+                      </div>
+                      <div style={{ flex:1, textAlign:"center", padding:"8px 6px", background:"var(--raised)", borderRadius:"var(--r8)", border:"1px solid var(--brd)" }}>
+                        <div style={{ fontSize:10, color:"var(--ink3)", marginBottom:2 }}>Today's Total</div>
+                        <div style={{ fontFamily:"var(--mono)", fontWeight:700, fontSize:12.5, color:"var(--accent)" }}>{fmtHours(totalWorkedHours)}</div>
+                      </div>
+                    </div>
+                    {/* No end-of-day lock — employees can clock in again for as many sessions as needed */}
+                    <button
+                      className="reg-btn"
+                      onClick={handleCheckIn}
+                      disabled={clockingIn}
+                      style={{ opacity: clockingIn ? 0.65 : 1, cursor: clockingIn ? "not-allowed" : "pointer", transition:"all 0.18s" }}
+                    >
+                      {clockingIn ? "Starting shift…" : "Clock In Again"}
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-            </>); })()}
-          </div>
-        </div>
+            </div>
+          );
+        })()}
+
+        {/* ── RIGHT: Monthly Stats ── */}
         <div className="card" style={{ marginBottom:0 }}>
-          <div className="ch"><div className="ct"><Icon n="chart" s={14}/>My Stats — {monthLabel(selMonth)}</div></div>
-          <div className="cb">
-            <div className="g3">
+          <div className="ch">
+            <div className="ct"><Icon n="chart" s={14}/>My Stats — {monthLabel(selMonth)}</div>
+            <div style={{ fontFamily:"var(--mono)", fontSize:11, color:"var(--ink3)", fontWeight:700 }}>
+              {Math.round((myStats.present+myStats.late)/Math.max(1,countWorkDays(yr,mo)-myStats.holidays)*100)||0}% attendance
+            </div>
+          </div>
+          <div className="cb" style={{ padding:"12px 16px" }}>
+            {/* Attendance rate bar */}
+            <div style={{ marginBottom:14 }}>
+              <div style={{ height:6, background:"var(--brd)", borderRadius:3, overflow:"hidden" }}>
+                <div style={{ height:"100%", width:`${Math.min(100,Math.round((myStats.present+myStats.late)/Math.max(1,countWorkDays(yr,mo)-myStats.holidays)*100)||0)}%`, background:"var(--green)", borderRadius:3, transition:"width 0.4s ease" }}/>
+              </div>
+            </div>
+            {/* Stats grid — 2 columns × 3 rows for tighter vertical footprint */}
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
               {[
-                { v:myStats.present, l:"Present", c:"var(--green)", bg:"var(--green-soft)" },
-                { v:myStats.late,    l:"Late",    c:"var(--amber)", bg:"var(--amber-soft)" },
-                { v:myStats.absent,  l:"Absent",  c:"var(--red)",   bg:"var(--red-soft)"   },
-                { v:myStats.leave,   l:"Leave",   c:"var(--accent)",bg:"var(--accent-soft)" },
-                { v:myStats.holidays,l:"Holidays",c:"var(--purple)",bg:"var(--purple-soft)"},
-                { v:Math.round((myStats.present+myStats.late)/Math.max(1,countWorkDays(yr,mo)-myStats.holidays)*100)||0, l:"Attendance %", c:"var(--teal)", bg:"var(--teal-soft)", suffix:"%" },
+                { v:myStats.present,  l:"Present",  c:"var(--green)",  bg:"var(--green-soft)" },
+                { v:myStats.late,     l:"Late",     c:"var(--amber)",  bg:"var(--amber-soft)" },
+                { v:myStats.absent,   l:"Absent",   c:"var(--red)",    bg:"var(--red-soft)"   },
+                { v:myStats.leave,    l:"Leave",    c:"var(--accent)", bg:"var(--accent-soft)" },
+                { v:myStats.holidays, l:"Holidays", c:"var(--purple)", bg:"var(--purple-soft)" },
+                { v:countWorkDays(yr,mo)-myStats.holidays, l:"Work Days", c:"var(--teal)", bg:"var(--teal-soft)" },
               ].map(s=>(
-                <div key={s.l} style={{ textAlign:"center", padding:"10px 6px", background:s.bg, borderRadius:"var(--r8)" }}>
-                  <div style={{ fontFamily:"var(--display)", fontWeight:700, fontSize:20, color:s.c }}>{s.v}{s.suffix||""}</div>
-                  <div style={{ fontSize:10, color:s.c, fontWeight:700, marginTop:2, textTransform:"uppercase", letterSpacing:"0.5px" }}>{s.l}</div>
+                <div key={s.l} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", background:s.bg, borderRadius:"var(--r8)" }}>
+                  <div style={{ fontFamily:"var(--display)", fontWeight:800, fontSize:22, color:s.c, lineHeight:1, minWidth:28, textAlign:"right" }}>{s.v}</div>
+                  <div style={{ fontSize:11, color:s.c, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.4px", lineHeight:1.3 }}>{s.l}</div>
                 </div>
               ))}
             </div>
@@ -1718,7 +1864,7 @@ const AttendanceMod = ({ currentUser }) => {
         </div>
       </div>
 
-      <div className="tabs">
+      <div className="tabs" style={{ marginBottom:10 }}>
         {["my","calendar","holidays","corrections",...(canViewTeam?["team"]:[]),...(canViewReports?["reports"]:[])].map(t=>(
           <div key={t} className={`tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>
             {t==="my"?"My Log":t==="calendar"?"Calendar":t==="holidays"?`Holidays${holidays.length?` · ${holidays.length}`:""}`:t==="corrections"?`Corrections${canApproveAttendance&&pendingCorrections.length>0?` · ${pendingCorrections.length}`:""}`:t==="team"?"Team Today":"Reports"}
@@ -1729,9 +1875,9 @@ const AttendanceMod = ({ currentUser }) => {
       {tab==="my" && (
         <div className="card">
           <div className="ch"><div className="ct"><Icon n="attend" s={14}/>My Daily Log — {monthLabel(selMonth)}</div></div>
-          <div className="tw" style={{ maxHeight:440, overflowY:"auto",overscrollBehavior:"none" }}>
+          <div className="tw" style={{ maxHeight:400, overflowY:"auto",overscrollBehavior:"none" }}>
             <table>
-              <thead><tr><th>Date</th><th>Day</th><th>Status</th><th>In</th><th>Out</th><th>Hours</th><th>Notes</th></tr></thead>
+              <thead><tr><th>Date</th><th>Day</th><th>Status</th><th>In</th><th>Out</th><th>Hours</th><th style={{ minWidth:120 }}>Flags</th></tr></thead>
               <tbody>
                 {Array.from({length:dim}).map((_,i)=>{
                   const d=i+1;
@@ -1750,15 +1896,38 @@ const AttendanceMod = ({ currentUser }) => {
                   const realIn  = isToday ? checkInTime  : (rec?.clock_in  || null);
                   const realOut = isToday ? checkOutTime : (rec?.clock_out || null);
                   const realHrs = isToday ? totalWorkedHours : (rec?.hours_worked ? Number(rec.hours_worked) : null);
+                  // Detect incomplete / missing punch for past non-holiday days
+                  const isPast = !isToday && !isFuture;
+                  const isMissingIn  = isPast && (st==="present"||st==="late") && !realIn;
+                  const isMissingOut = isPast && (st==="present"||st==="late") && realIn && !realOut;
+                  const isAbsentWorkday = isPast && st==="absent" && rawSt;
+                  const needsFix = isMissingIn || isMissingOut || isAbsentWorkday;
+                  const hasPendingCorr = corrections.some(r => r.date === ds && r.status === "pending");
+                  const openFixPunchFor = (date) => { setCorrError(""); setCorrForm({ date, reason:"" }); setCorrModal(true); };
+                  const noteText = st==="late"?"Late arrival":st==="absent"?"Not marked":st==="leave"?"Approved leave":st==="holiday"?"Public holiday":"—";
                   return (
-                    <tr key={ds} style={{ background:isToday?"rgba(27,69,245,0.03)":"" }}>
+                    <tr key={ds} style={{ background:isToday?"rgba(27,69,245,0.03)":needsFix?"rgba(220,38,38,0.025)":"" }}>
                       <td style={{ fontFamily:"var(--mono)", fontSize:12 }}>{ds}{isToday&&<span className="bdg bdg-b" style={{ fontSize:9,marginLeft:6 }}>Today</span>}</td>
                       <td className="t3 tsm">{dayName}</td>
                       <td>{attBadge(st)}</td>
                       <td style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--green)" }}>{realIn||"—"}</td>
                       <td style={{ fontFamily:"var(--mono)", fontSize:12, color:"var(--red)" }}>{realOut||"—"}</td>
                       <td style={{ fontFamily:"var(--mono)", fontSize:12 }}>{isToday ? fmtHours(totalWorkedHours) : (realHrs ? fmtHours(realHrs) : "—")}</td>
-                      <td className="t3 tsm">{st==="late"?"Late arrival":st==="absent"?"Not marked":st==="leave"?"Approved leave":st==="holiday"?"Public holiday":"—"}</td>
+                      <td>
+                        {needsFix ? (
+                          <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                            <span style={{ display:"inline-flex", alignItems:"center", gap:4, padding:"2px 7px", background:"var(--amber-soft)", border:"1px solid rgba(217,119,6,0.3)", borderRadius:10, fontSize:10.5, color:"var(--amber)", fontWeight:700, whiteSpace:"nowrap" }}>
+                              ⚠ {isMissingIn?"No punch-in":isMissingOut?"No punch-out":"Absent"}
+                            </span>
+                            {hasPendingCorr
+                              ? <span style={{ fontSize:10.5, color:"var(--ink3)", fontStyle:"italic" }}>Pending…</span>
+                              : <button onClick={()=>openFixPunchFor(ds)} style={{ padding:"2px 8px", fontSize:10.5, fontWeight:700, borderRadius:"var(--r6)", border:"1px solid var(--accent)", background:"var(--accent-soft)", color:"var(--accent)", cursor:"pointer", whiteSpace:"nowrap" }}>Fix Punch</button>
+                            }
+                          </div>
+                        ) : (
+                          <span className="t3 tsm">{noteText}</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 }).filter(Boolean)}
