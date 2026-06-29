@@ -48,12 +48,27 @@ def _port() -> int:
     return int(os.getenv("PORT") or os.getenv("HTTP_PLATFORM_PORT") or "4000")
 
 
+def _frontend_origins() -> tuple:
+    # FRONTEND_ORIGIN may be a single URL or a comma-separated list — e.g. when both
+    # a production Render frontend and a local dev server need to call this API.
+    # No trailing slashes; the browser's Origin header never has one, and CORS does
+    # an exact string match against allow_origins.
+    raw = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+    return tuple(origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip())
+
+
+# RENDER is auto-injected by Render on every service, so this is true only when actually
+# deployed there — never on a local machine. Used to fail fast on missing prod secrets
+# instead of silently falling back to a value that breaks auth after every restart/deploy.
+IS_RENDER = bool(os.getenv("RENDER"))
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = _port()
     reload: bool = os.getenv("RELOAD", "false").lower() == "true"
-    frontend_origin: str = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+    frontend_origins: tuple = _frontend_origins()
     database_url: str = _build_database_url()
 
     smtp_host: str   = os.getenv("SMTP_HOST", "smtp.gmail.com")
@@ -71,3 +86,29 @@ class Settings:
 
 # Singleton settings object imported everywhere in the app.
 settings = Settings()
+
+
+def validate_production_env() -> None:
+    """
+    Fails the deploy loudly instead of starting with broken auth/CORS silently.
+    Only enforced on Render (IS_RENDER) — local dev keeps working with defaults.
+    Call this once at startup, before the app accepts traffic.
+    """
+    missing = []
+    if IS_RENDER and not os.getenv("JWT_SECRET"):
+        missing.append(
+            "JWT_SECRET is not set. Without it, every redeploy or free-tier "
+            "spin-down/spin-up regenerates a random signing key, which invalidates "
+            "every logged-in user's token and makes every protected API call return "
+            "401 Unauthorized. Set a fixed JWT_SECRET in Render's Environment tab."
+        )
+    if IS_RENDER and settings.frontend_origins == ("http://localhost:5173",):
+        missing.append(
+            "FRONTEND_ORIGIN is not set (still defaulting to localhost:5173). "
+            "Set it to your deployed frontend's exact URL "
+            "(e.g. https://your-frontend.onrender.com, no trailing slash) "
+            "in Render's Environment tab, or CORS will block every request "
+            "from the deployed frontend."
+        )
+    if missing:
+        raise RuntimeError("Production environment misconfigured:\n- " + "\n- ".join(missing))

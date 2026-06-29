@@ -52,7 +52,7 @@ def _cache_bust(*keys):
     for k in keys:
         _CACHE.pop(k, None)
 
-from config import settings
+from config import settings, validate_production_env
 from secrets import randbelow
 
 from db import (
@@ -75,6 +75,7 @@ from db import (
     HR_EDITABLE,
     # payroll
     fetch_payroll_runs,
+    upsert_payroll_run,
     fetch_payroll_structure,
     update_payroll_structure_component,
     fetch_payroll_field_configs,
@@ -156,24 +157,11 @@ from schemas import (
 # title and version appear in the auto-generated /docs Swagger UI.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_production_env()
     init_database()
     yield
 
 app = FastAPI(title="DOLOXE HRMS API", version="1.0.0", lifespan=lifespan)
-
-# ── CORS middleware ───────────────────────────────────────────────────────────
-# Browsers block cross-origin requests unless the server explicitly allows them.
-# We allow the configured frontend origin (e.g. http://localhost:5173 in dev,
-# or the production Vercel URL in prod) so the React app can call our API.
-# allow_credentials=True is required for cookie-based auth (not currently used
-# but kept for future sessions).
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
-    allow_credentials=True,
-    allow_methods=["*"],   # allow GET, POST, PUT, DELETE, OPTIONS
-    allow_headers=["*"],   # allow Content-Type, Authorization, etc.
-)
 
 
 
@@ -211,6 +199,32 @@ async def require_auth(request: Request, call_next):
     except JWTError:
         return JSONResponse(status_code=401, content={"detail": "Token invalid or expired. Please log in again."})
     return await call_next(request)
+
+
+# ── CORS middleware ───────────────────────────────────────────────────────────
+# Browsers block cross-origin requests unless the server explicitly allows them.
+# FRONTEND_ORIGIN can be a comma-separated list — e.g. the deployed Render frontend
+# plus a local dev server — so allow_origins takes the full parsed tuple.
+#
+# IMPORTANT — must be registered AFTER require_auth (above), not before. Starlette
+# nests middleware so the LAST one added via add_middleware()/@app.middleware ends up
+# OUTERMOST. require_auth short-circuits straight to a 401 JSONResponse without
+# calling call_next() — if CORSMiddleware were the inner layer (i.e. added first),
+# that 401 would skip CORS entirely and go out with no Access-Control-Allow-Origin
+# header. The browser then blocks the frontend from even reading the 401 — on a
+# cross-origin Render deployment this is exactly what makes auth "work locally,
+# break in production": the 401 itself isn't the bug, the missing CORS header on it is.
+#
+# allow_credentials=True is harmless here — auth is a Bearer token in the
+# Authorization header (stored in localStorage), not a cookie, so no Secure/SameSite
+# cookie flags apply to this app. Kept only in case cookie-based sessions are added later.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(settings.frontend_origins),
+    allow_credentials=True,
+    allow_methods=["*"],   # allow GET, POST, PUT, DELETE, OPTIONS
+    allow_headers=["*"],   # allow Content-Type, Authorization, etc.
+)
 
 
 # ── Health check ─────────────────────────────────────────────────────────────
@@ -430,6 +444,43 @@ def employees():
 @app.get("/api/payroll/runs")
 def payroll_runs():
     return {"payrollRuns": fetch_payroll_runs()}
+
+
+_MONTH_NAMES = ["January","February","March","April","May","June","July",
+                "August","September","October","November","December"]
+
+def _parse_payroll_month_label(label: str) -> date:
+    """Converts a payroll month label like "June 2026" into date(2026, 6, 1)."""
+    name, _, year_text = str(label or "").partition(" ")
+    try:
+        month_num = _MONTH_NAMES.index(name) + 1
+        return date(int(year_text), month_num, 1)
+    except (ValueError, IndexError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid payroll month: {label!r}") from exc
+
+
+@app.put("/api/payroll/runs/{payroll_month}")
+def put_payroll_run(payroll_month: str, payload: dict):
+    """
+    Persists the month-level payroll run settings (pay date, payment mode, status,
+    tax regime, remarks) so they're the same for every employee/session viewing
+    that month — not just whoever last had the Payroll Run form open locally.
+    payroll_month is a URL segment like "June%202026". payload keys are all
+    optional: payDate ("YYYY-MM-DD"), paymentMode, payrollStatus, taxRegime,
+    remarks, processedBy.
+    """
+    month_date = _parse_payroll_month_label(payroll_month)
+    pay_date = date.fromisoformat(payload["payDate"]) if payload.get("payDate") else None
+    run = upsert_payroll_run(
+        month_date,
+        status=payload.get("payrollStatus"),
+        pay_date=pay_date,
+        payment_mode=payload.get("paymentMode"),
+        tax_regime=payload.get("taxRegime"),
+        remarks=payload.get("remarks"),
+        processed_by=payload.get("processedBy"),
+    )
+    return {"ok": True, "run": run}
 
 
 # ── Announcements endpoints ───────────────────────────────────────────────────
@@ -722,10 +773,13 @@ def _session_hours(sessions):
     return round(total, 2)
 
 
+def _attendance_record_for_date(employee_id, att_date):
+    records = fetch_attendance_for_month(employee_id, att_date.year, att_date.month)
+    return next((r for r in records if r.get("date") == att_date.isoformat()), None)
+
+
 def _today_attendance_record(employee_id):
-    today = date.today()
-    records = fetch_attendance_for_month(employee_id, today.year, today.month)
-    return next((r for r in records if r.get("date") == today.isoformat()), None)
+    return _attendance_record_for_date(employee_id, date.today())
 
 @app.get("/api/attendance/date-range")
 def get_attendance_date_range():
@@ -807,6 +861,8 @@ def post_correction(payload: dict):
             emp_name=payload["empName"],
             corr_date=corr_date,
             reason=payload["reason"],
+            corrected_clock_in=payload.get("correctedClockIn") or None,
+            corrected_clock_out=payload.get("correctedClockOut") or None,
         )
         create_notifications_for_hr(
             type_="attendance_correction",
@@ -821,14 +877,36 @@ def post_correction(payload: dict):
 
 @app.put("/api/attendance/corrections/{correction_id}/approve")
 def approve_correction(correction_id: int, payload: dict):
-    """HR approves a missed-punch request and marks attendance as present for that day."""
+    """HR approves a missed-punch request, marks attendance present, and — if the employee
+    supplied a corrected clock-in/out time — actually writes that time into the day's
+    attendance sessions. Without this, approving only flips the status to "present" while
+    the punch itself stays missing."""
     try:
         rec = update_correction_status(correction_id, "approved", actioned_by=payload.get("actionedBy"))
         if not rec:
             raise HTTPException(status_code=404, detail="Correction not found.")
         emp_id = rec["employee_id"]
         att_date = date.fromisoformat(rec["date"]) if isinstance(rec["date"], str) else rec["date"]
-        upsert_attendance(emp_id, att_date, "present")
+        corrected_in = rec.get("corrected_clock_in")
+        corrected_out = rec.get("corrected_clock_out")
+        if corrected_in or corrected_out:
+            current = _attendance_record_for_date(emp_id, att_date)
+            sessions = _attendance_sessions(current)
+            open_session = next((s for s in reversed(sessions) if s.get("in") and not s.get("out")), None)
+            if open_session and corrected_out:
+                open_session["out"] = corrected_out
+            else:
+                sessions.append({"in": corrected_in, "out": corrected_out})
+            hours = _session_hours(sessions)
+            first_in = next((s.get("in") for s in sessions if s.get("in")), None)
+            last_out = next((s.get("out") for s in reversed(sessions) if s.get("out")), "")
+            upsert_attendance(
+                emp_id, att_date, "present",
+                clock_in=first_in, clock_out=last_out, hours_worked=hours,
+                notes=json.dumps({"sessions": sessions}),
+            )
+        else:
+            upsert_attendance(emp_id, att_date, "present")
         return {"ok": True, "correction": rec}
     except HTTPException:
         raise

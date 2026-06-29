@@ -77,9 +77,14 @@ const GS = () => (
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
       overscroll-behavior: none;
+      /* Gecko (Firefox) has no ::-webkit-scrollbar support — this is its equivalent,
+         so the slim scrollbar look is consistent across Blink/WebKit/Gecko instead
+         of Firefox falling back to its much wider default. */
+      scrollbar-width: thin;
+      scrollbar-color: var(--ink5) transparent;
     }
 
-    /* Slim, polished scrollbar */
+    /* Slim, polished scrollbar — Blink/WebKit. Firefox uses scrollbar-width/-color above. */
     ::-webkit-scrollbar { width: 4px; height: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--ink5); border-radius: 4px; }
@@ -110,11 +115,12 @@ const GS = () => (
       letter-spacing: -0.5px; color: var(--ink);
     }
     .tb-wordmark span { color: var(--accent); }
-    .tb-center { flex: 1; display: flex; align-items: center; padding: 0 20px; }
+    .tb-center { flex: 1; min-width: 0; display: flex; align-items: center; padding: 0 20px; }
     .tb-search {
       display: flex; align-items: center; gap: 8px;
       background: var(--paper); border: 1.5px solid var(--brd);
-      border-radius: var(--r10); padding: 0 13px; height: 34px; width: 300px;
+      border-radius: var(--r10); padding: 0 13px; height: 34px;
+      width: clamp(140px, 22vw, 300px); /* shrinks smoothly instead of needing to vanish at one breakpoint */
       font-size: 12.5px; color: var(--ink4); cursor: text;
       transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
     }
@@ -217,7 +223,12 @@ const GS = () => (
     .sb-signout:active { transform: translateY(1px); box-shadow: none; }
 
     /* ── APP SHELL & MAIN CONTENT ────────────────────────────────────────── */
-    .app { display: flex; height: 100vh; width: 100%; overflow: hidden; background: var(--paper); }
+    /* height: 100dvh after 100vh — browsers that don't understand dvh ignore that
+       line and keep 100vh; browsers that do (all current engines) use it instead,
+       so the shell tracks the *actual visible* viewport as mobile browser chrome
+       (address bar) shows/hides, instead of being sized for the largest possible
+       viewport and getting clipped. */
+    .app { display: flex; height: 100vh; height: 100dvh; width: 100%; overflow: hidden; background: var(--paper); }
     /* main is fixed so it sits alongside the sidebar and below the topbar */
     .main {
       position: fixed;
@@ -249,7 +260,9 @@ const GS = () => (
 
     /* ── STAT CARDS ──────────────────────────────────────────────────────── */
     /* Four-across grid of KPI summary tiles above each module. */
-    .sg { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-bottom: 22px; }
+    /* auto-fit + minmax: as many 200px-minimum columns as fit, collapsing to fewer
+       (down to 1) as the viewport shrinks — no breakpoint needed at all. */
+    .sg { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 12px; margin-bottom: 22px; }
     .sc {
       background: var(--surface); border: 1px solid var(--brd);
       border-radius: var(--r14); padding: 18px 18px 15px;
@@ -271,6 +284,12 @@ const GS = () => (
       background: var(--surface); border: 1px solid var(--brd);
       border-radius: var(--r14); margin-bottom: 16px; overflow: hidden;
       box-shadow: var(--shadow-sm); transition: box-shadow 0.18s;
+      /* Flex/grid items default to min-width:auto, which refuses to shrink below
+         a wide table's content size — that's what actually causes a grid/flex
+         layout to blow out the page width on narrow screens, even when the table
+         itself has overflow-x:auto. min-width:0 lets .card shrink to its
+         container so .tw's own scrollbar (below) is what handles overflow. */
+      min-width: 0;
     }
     .card:hover { box-shadow: var(--shadow-md); }
     .ch {
@@ -344,7 +363,7 @@ const GS = () => (
     .tab.active { color: var(--accent); border-bottom-color: var(--accent); background: var(--accent-soft); }
 
     /* ── FORM ────────────────────────────────────────────────────────────── */
-    .fg { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .fg { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 14px; }
     .ff { grid-column: 1/-1; }
     .fgrp { display: flex; flex-direction: column; gap: 5px; }
     .flbl { font-size: 10.5px; font-weight: 800; color: var(--ink3); text-transform: uppercase; letter-spacing: 0.7px; }
@@ -387,7 +406,8 @@ const GS = () => (
       position: relative; z-index: 1;
       background: var(--surface); border-radius: var(--r16);
       border: 1px solid var(--brd); box-shadow: var(--shadow-xl);
-      width: 520px; max-width: 96vw; max-height: 88vh;
+      width: 520px; max-width: 96vw;
+      max-height: 88vh; max-height: 88dvh;
       display: flex; flex-direction: column;
       animation: moup 0.22s var(--ease);
     }
@@ -410,14 +430,14 @@ const GS = () => (
     }
 
     /* ── MISC UTILITIES ──────────────────────────────────────────────────── */
-    .g2   { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .g2   { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap: 16px; }
     .sep  { border: none; border-top: 1px solid var(--brd); margin: 14px 0; }
     .fw6  { font-weight: 600; }
     .fw7  { font-weight: 700; }
     .t3   { color: var(--ink3); }
     .tsm  { font-size: 12px; }
     .mono { font-family: var(--mono); }
-    .tw   { overflow-x: auto; overscroll-behavior: none; }
+    .tw   { overflow-x: auto; overscroll-behavior: none; min-width: 0; }
 
     /* Leave balance bar */
     .lbar {
@@ -441,7 +461,7 @@ const GS = () => (
     .emp-row:last-child { border-bottom: none; }
 
     /* Info key-value grid (employee detail panel) */
-    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; }
+    .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 10px 24px; }
     .if   { font-size: 12.5px; }
     .if-l { font-size: 10px; color: var(--ink4); margin-bottom: 2px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; }
 
@@ -489,13 +509,14 @@ const GS = () => (
 
     /* ── LOGIN (error / loading states via AppBootstrap) ─────────────────── */
     .login-wrap {
-      min-height: 100vh; width: 100%;
+      min-height: 100vh; min-height: 100dvh; width: 100%;
       display: flex; align-items: center; justify-content: center;
       background: var(--paper);
     }
     .login-box {
       background: var(--surface); border: 1px solid var(--brd);
-      border-radius: var(--r16); padding: 36px; width: 440px;
+      border-radius: var(--r16); padding: 36px;
+      width: min(440px, 92vw); /* fluid — no breakpoint needed to avoid overflow on narrow screens */
       box-shadow: var(--shadow-xl);
     }
     .login-logo  { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; }
@@ -653,20 +674,12 @@ const GS = () => (
       .main { left: 0 !important; }
       .main-inner { padding: 20px 16px; }
 
-      /* Stats grid → 2 columns */
-      .sg { grid-template-columns: 1fr 1fr; }
+      /* .sg / .fg / .info-grid / .g2 need no override here anymore — they're
+         auto-fit/minmax fluid grids now, so they collapse to fewer columns on
+         their own as the viewport narrows instead of snapping at this breakpoint. */
 
       /* Page header stacks on mobile */
       .ph { flex-direction: column; gap: 12px; align-items: flex-start; }
-
-      /* Form grids → single column */
-      .fg { grid-template-columns: 1fr; }
-
-      /* Info key-value pairs → single column */
-      .info-grid { grid-template-columns: 1fr; }
-
-      /* 2-col utility → single column */
-      .g2 { grid-template-columns: 1fr; }
 
       /* Tabs scroll instead of wrapping */
       .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -676,7 +689,7 @@ const GS = () => (
       .modal { width: 96vw !important; max-width: 96vw; }
 
       /* Login box */
-      .login-box { width: 92vw; padding: 28px 18px; }
+      .login-box { padding: 28px 18px; }
     }
 
     /* ── MOBILE  (≤ 480px) ─────────────────────────────────────────────────── */
@@ -694,27 +707,38 @@ const GS = () => (
       .tb-uname { font-size: 11.5px; }
       .tb-urole { display: none; }
       .sign-out-label { display: none; }
-      .g4 { grid-template-columns: 1fr 1fr; }
-      .g5 { grid-template-columns: 1fr 1fr; }
       .week-bar { flex-wrap: wrap; gap: 10px; }
     }
 
     /* ── EXTRA RESPONSIVE GRID UTILITIES ─────────────────────────────────── */
-    /* These complement .g2 (already defined above) for 3/4/5-col patterns   */
+    /* These complement .g2 (already defined above) for 3/5-col patterns     */
     /* and .dir-pane for the documents two-pane directory layout.            */
-    .g3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-    .g4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; }
-    .g5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+    .g3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap: 8px; }
+    .g5 { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px,1fr)); gap: 8px; }
     .dir-pane { display: grid; grid-template-columns: 220px 1fr; gap: 14px; align-items: start; }
 
     @media (max-width: 768px) {
-      .g4 { grid-template-columns: 1fr 1fr; }
-      .g5 { grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); }
       .dir-pane { grid-template-columns: 1fr; }
       /* Notif panel: prevent overflow beyond viewport on narrow screens */
       .notif-panel { max-width: calc(100vw - 20px) !important; }
       /* Week bar wraps instead of overflowing */
       .week-bar { flex-wrap: wrap; }
+    }
+
+    /* ── TOUCH TARGETS ─────────────────────────────────────────────────────
+       pointer:coarse matches touch input specifically (finger, not mouse/
+       trackpad) regardless of screen size — an iPad in landscape at 1024px
+       still needs ≥44px tap targets even though it wouldn't hit any
+       max-width breakpoint above. Mouse/trackpad users keep the current
+       compact sizing; this only changes anything on touch devices. */
+    @media (pointer: coarse) {
+      .tb-btn, .mc { width: 44px; height: 44px; }
+      .tb-hamburger { width: 44px; height: 44px; }
+      .sb-item { padding: 11px 10px 11px 12px; }
+      .tab { padding: 12px 15px; }
+      .pill { padding: 8px 14px; }
+      .btn { padding: 10px 16px; }
+      .btn-sm { padding: 8px 13px; }
     }
   `}</style>
 );
@@ -777,6 +801,43 @@ const Modal = ({ title, onClose, children, footer, wide }) => createPortal(
   </div>,
   document.body
 );
+
+// ─── URL DEEP-LINKING ────────────────────────────────────────────────────────
+// Lightweight, dependency-free query-param sync (no react-router) — this is a
+// single-path SPA with exactly two flat params (page, tab), so a full router
+// would be retrofitting machinery this app doesn't need. Query params (not path
+// segments) so no server-side rewrite rule is required on whatever static host
+// serves the built app.
+const getUrlParams = () => new URLSearchParams(window.location.search);
+const setUrlParams = (updates) => {
+  const params = getUrlParams();
+  Object.entries(updates).forEach(([k, v]) => {
+    if (v == null) params.delete(k); else params.set(k, v);
+  });
+  const query = params.toString();
+  window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
+};
+
+// Mirrors a module's local "active tab" into ?tab= so the current view is
+// shareable/bookmarkable and survives a refresh.
+// deepLink: { tab, key } | null — passed down from HRApp when a notification
+// click (or the page's initial URL) should force a specific sub-tab. `key`
+// changes on every new instruction, so comparing it against the last-applied
+// key (held in state, not a ref) catches even a repeat of the same tab string
+// — e.g. clicking two different "Attendance Correction" notifications in a row.
+// Adjusted directly during render (not via an effect) per React's guidance for
+// "state that needs to change in response to a prop" — avoids the extra
+// effect-triggered render pass.
+const useUrlTab = (defaultTab, deepLink) => {
+  const [tab, setTabState] = useState(() => getUrlParams().get("tab") || defaultTab);
+  const [appliedKey, setAppliedKey] = useState(deepLink?.key);
+  if (deepLink && deepLink.key !== appliedKey) {
+    setAppliedKey(deepLink.key);
+    setTabState(deepLink.tab);
+  }
+  const setTab = (t) => { setTabState(t); setUrlParams({ tab: t }); };
+  return [tab, setTab];
+};
 
 // ─── EMPLOYEE DATA & ACCESS CONTROL ──────────────────────────────────────────
 // API_URL is set via the VITE_API_URL env var at build time; falls back to
@@ -1256,13 +1317,14 @@ const LoginScreen = ({ onLogin }) => {
 // ─── ATTENDANCE MODULE ─────────────────────────────────────────────────────────
 // Manages daily clock-in/out, the monthly calendar view, team overview, missed
 // punch correction requests, and HR approval of those corrections.
-const AttendanceMod = ({ currentUser }) => {
+const AttendanceMod = ({ currentUser, deepLink }) => {
   // Attendance map keyed by empId → { [YYYY-MM-DD]: "present"|"late"|"absent"|"leave"|"holiday"|"weekend" }
   const [attendance, setAttendance] = useState({});
   // Clock detail records keyed by empId → { [YYYY-MM-DD]: { clock_in, clock_out, hours_worked } }
   const [clockRecords, setClockRecords] = useState({});
-  // Active tab: "my" | "calendar" | "corrections" | "team" | "reports"
-  const [tab, setTab] = useState("my");
+  // Active tab: "my" | "calendar" | "corrections" | "team" | "reports" — mirrored to
+  // ?tab= in the URL; deepLink lets a notification click jump straight to a sub-tab.
+  const [tab, setTab] = useUrlTab("my", deepLink);
   // Month currently displayed in the stats and calendar views ("YYYY-MM").
   const [selMonth, setSelMonth] = useState(CURRENT_MONTH_KEY);
   // Clock-in state — tracks whether the user is currently clocked in today.
@@ -1284,7 +1346,7 @@ const AttendanceMod = ({ currentUser }) => {
   // Controls visibility of the "Missed Punch Request" submission modal.
   const [corrModal, setCorrModal] = useState(false);
   // Controlled form state for the missed punch request modal.
-  const [corrForm, setCorrForm] = useState({ date:"", reason:"" });
+  const [corrForm, setCorrForm] = useState({ date:"", reason:"", correctedClockIn:"", correctedClockOut:"" });
   const [corrError, setCorrError] = useState("");
   const [corrSaving, setCorrSaving] = useState(false);
   // Dynamic month list for Reports dropdown — built from actual DB date range
@@ -1304,6 +1366,9 @@ const AttendanceMod = ({ currentUser }) => {
   const [clockingOut, setClockingOut] = useState(false);
   // Exact duration (ms) of the just-completed shift, captured at clock-out for State C's summary
   const [lastShiftMs, setLastShiftMs] = useState(null);
+  // Set when the clock-in/out API call fails or the server rejects it — surfaces a failure
+  // that was previously silent (the optimistic local update looked fine, but never saved).
+  const [clockSaveError, setClockSaveError] = useState("");
 
   const canViewTeam = hasTeamReports(currentUser) || canViewAttendanceReports(currentUser);
   const canViewReports = canViewAttendanceReports(currentUser);
@@ -1329,6 +1394,15 @@ const AttendanceMod = ({ currentUser }) => {
     const parsed = new Date();
     parsed.setHours(hours, minutes, 0, 0);
     return parsed;
+  };
+  // Converts a native <input type="time"> 24-hour value ("14:30") into the "HH:MM AM/PM"
+  // format the rest of the app stores clock_in/clock_out as.
+  const to12HourClock = (hhmm) => {
+    if (!hhmm) return null;
+    const [h, m] = hhmm.split(":").map(Number);
+    const period = h >= 12 ? "PM" : "AM";
+    const h12 = h % 12 || 12;
+    return `${String(h12).padStart(2, "0")}:${String(m).padStart(2, "0")} ${period}`;
   };
   const clockGapMinutes = (startText, endText) => {
     const start = parseTodayClock(startText);
@@ -1460,7 +1534,7 @@ const AttendanceMod = ({ currentUser }) => {
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
-  }, [checkedIn]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [checkedIn]);
 
   // Formats an exact duration (ms) as "X hours, Y minutes" — falls back to seconds when the
   // whole shift was under a minute, so very short sessions still show a non-zero duration.
@@ -1499,6 +1573,7 @@ const AttendanceMod = ({ currentUser }) => {
     if (clockBusyRef.current || checkedIn || clockingIn) return;
     clockBusyRef.current = true;
     setClockingIn(true); // disable button immediately — prevents double-click
+    setClockSaveError("");
     const now = new Date();
     const t = now.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
     checkInDateRef.current = now;
@@ -1514,7 +1589,8 @@ const AttendanceMod = ({ currentUser }) => {
       const data = await res.json();
       const savedLogs = parseSessionLogs(data.record?.notes);
       if (res.ok && savedLogs.length) setTimeLogs(savedLogs);
-    } catch { /* fire-and-forget */ }
+      else if (!res.ok) setClockSaveError(`Clock-in shown above didn't save (server said: ${data?.detail || res.status}). It will disappear on reload — try again.`);
+    } catch { setClockSaveError("Clock-in shown above didn't save — couldn't reach the server. It will disappear on reload — try again."); }
     finally { clockBusyRef.current = false; setClockingIn(false); }
   };
   const handleCheckOut = async () => {
@@ -1522,6 +1598,7 @@ const AttendanceMod = ({ currentUser }) => {
     if (clockBusyRef.current || !checkedIn || !checkInDateRef.current || clockingOut) return;
     clockBusyRef.current = true;
     setClockingOut(true); // disable button immediately — prevents double-click
+    setClockSaveError("");
     const now = new Date();
     const t = now.toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
     const exactMs = now - checkInDateRef.current;
@@ -1540,7 +1617,8 @@ const AttendanceMod = ({ currentUser }) => {
       const data = await res.json();
       const savedLogs = parseSessionLogs(data.record?.notes);
       if (res.ok && savedLogs.length) setTimeLogs(savedLogs);
-    } catch { /* fire-and-forget */ }
+      else if (!res.ok) setClockSaveError(`Clock-out shown above didn't save (server said: ${data?.detail || res.status}). It will disappear on reload — try again.`);
+    } catch { setClockSaveError("Clock-out shown above didn't save — couldn't reach the server. It will disappear on reload — try again."); }
     finally { clockBusyRef.current = false; setClockingOut(false); }
   };
 
@@ -1586,12 +1664,16 @@ const AttendanceMod = ({ currentUser }) => {
     try {
       const res = await apiFetch(`${API_URL}/api/attendance/corrections`, {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ employeeId: currentUser.id, empName: currentUser.name, date: corrForm.date, reason }),
+        body: JSON.stringify({
+          employeeId: currentUser.id, empName: currentUser.name, date: corrForm.date, reason,
+          correctedClockIn: to12HourClock(corrForm.correctedClockIn),
+          correctedClockOut: to12HourClock(corrForm.correctedClockOut),
+        }),
       });
       const data = await res.json();
       if (!res.ok) { setCorrError(data.detail || "Could not submit request."); return; }
       setCorrections(prev => [data.correction, ...prev]);
-      setCorrForm({ date:"", reason:"" });
+      setCorrForm({ date:"", reason:"", correctedClockIn:"", correctedClockOut:"" });
       setCorrError("");
       setCorrFilter("all");
       setCorrModal(false);
@@ -1727,6 +1809,14 @@ const AttendanceMod = ({ currentUser }) => {
                 {attBadge(attendance[currentUser.id]?.[todayStr])}
               </div>
               <div className="cb" style={{ padding:"12px 14px" }}>
+
+                {/* Save-failure banner — surfaces a clock-in/out that displayed but never persisted */}
+                {clockSaveError && (
+                  <div style={{ marginBottom:10, padding:"10px 12px", background:"var(--red-soft)", border:"1px solid rgba(220,38,38,0.25)", borderRadius:"var(--r8)", fontSize:12.5, color:"var(--red)", display:"flex", alignItems:"flex-start", gap:8 }}>
+                    <span style={{ fontSize:14, lineHeight:1.3 }}>⚠️</span>
+                    <span>{clockSaveError}</span>
+                  </div>
+                )}
 
                 {/* Leave / Holiday override banner */}
                 {(isOnLeave || isHoliday) && (
@@ -1893,7 +1983,10 @@ const AttendanceMod = ({ currentUser }) => {
                   if (isWeekend) return null;
                   if (!rawSt && isFuture && !isToday) return null;
                   const rec = isToday ? null : (clockRecords[currentUser.id]?.[ds] || null);
-                  const realIn  = isToday ? checkInTime  : (rec?.clock_in  || null);
+                  // For today, use the day's first session start — not checkInTime, which
+                  // tracks whichever session is currently active/most recent. timeLogs is
+                  // append-only, so timeLogs[0] is always the day's first clock-in.
+                  const realIn  = isToday ? (timeLogs[0]?.in || checkInTime) : (rec?.clock_in  || null);
                   const realOut = isToday ? checkOutTime : (rec?.clock_out || null);
                   const realHrs = isToday ? totalWorkedHours : (rec?.hours_worked ? Number(rec.hours_worked) : null);
                   // Detect incomplete / missing punch for past non-holiday days
@@ -1903,7 +1996,7 @@ const AttendanceMod = ({ currentUser }) => {
                   const isAbsentWorkday = isPast && st==="absent" && rawSt;
                   const needsFix = isMissingIn || isMissingOut || isAbsentWorkday;
                   const hasPendingCorr = corrections.some(r => r.date === ds && r.status === "pending");
-                  const openFixPunchFor = (date) => { setCorrError(""); setCorrForm({ date, reason:"" }); setCorrModal(true); };
+                  const openFixPunchFor = (date) => { setCorrError(""); setCorrForm({ date, reason:"", correctedClockIn:"", correctedClockOut:"" }); setCorrModal(true); };
                   const noteText = st==="late"?"Late arrival":st==="absent"?"Not marked":st==="leave"?"Approved leave":st==="holiday"?"Public holiday":"—";
                   return (
                     <tr key={ds} style={{ background:isToday?"rgba(27,69,245,0.03)":needsFix?"rgba(220,38,38,0.025)":"" }}>
@@ -2041,14 +2134,16 @@ const AttendanceMod = ({ currentUser }) => {
           </div>
           <div className="tw" style={{ maxHeight:460, overflowY:"auto",overscrollBehavior:"none" }}>
             <table>
-              <thead><tr><th>Employee</th><th>Date Missed</th><th>Current Status</th><th>Explanation</th><th>Requested</th><th>Decision</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Employee</th><th>Date Missed</th><th>Current Status</th><th>Explanation</th><th>Punch Fix</th><th>Requested</th><th>Decision</th><th>Actions</th></tr></thead>
               <tbody>
                 {corrLoading ? (
-                  <tr><td colSpan={7}><div className="empty">Loading…</div></td></tr>
+                  <tr><td colSpan={8}><div className="empty">Loading…</div></td></tr>
                 ) : visibleCorrections.map(r=>{
                   const empId = r.employee_id || r.empId;
                   const emp = ALL_USERS.find(e => e.id === empId);
                   const currentStatus = attendance[empId]?.[r.date];
+                  const fixIn = r.corrected_clock_in || r.correctedClockIn;
+                  const fixOut = r.corrected_clock_out || r.correctedClockOut;
                   return (
                     <tr key={r.id}>
                       <td>
@@ -2060,6 +2155,11 @@ const AttendanceMod = ({ currentUser }) => {
                       <td className="mono tsm">{r.date}</td>
                       <td>{attBadge(currentStatus)}</td>
                       <td className="t3 tsm" style={{ maxWidth:260 }}>{r.reason}</td>
+                      <td className="mono tsm">
+                        {fixIn || fixOut
+                          ? <>{fixIn && <div>In: {fixIn}</div>}{fixOut && <div>Out: {fixOut}</div>}</>
+                          : <span className="t3">No time given</span>}
+                      </td>
                       <td className="mono tsm">{r.requested_at||r.requestedAt}</td>
                       <td>{statusText(r.status)}<div className="t3 tsm">{r.actioned_by||r.actionedBy ? `${r.actioned_by||r.actionedBy} · ${r.actioned_at||r.actionedAt}` : "HR department only"}</div></td>
                       <td>
@@ -2073,7 +2173,7 @@ const AttendanceMod = ({ currentUser }) => {
                     </tr>
                   );
                 })}
-                {!visibleCorrections.length&&<tr><td colSpan={7}><div className="empty">No attendance correction requests found</div></td></tr>}
+                {!visibleCorrections.length&&<tr><td colSpan={8}><div className="empty">No attendance correction requests found</div></td></tr>}
               </tbody>
             </table>
           </div>
@@ -2096,7 +2196,7 @@ const AttendanceMod = ({ currentUser }) => {
               <tbody>
                 {teamFiltered.map(({emp,status})=>{
                   const tRec = emp.id === currentUser.id ? null : (clockRecords[emp.id]?.[todayStr] || null);
-                  const tIn  = emp.id === currentUser.id ? checkInTime  : (tRec?.clock_in  || null);
+                  const tIn  = emp.id === currentUser.id ? (timeLogs[0]?.in || checkInTime) : (tRec?.clock_in  || null);
                   const tOut = emp.id === currentUser.id ? checkOutTime : (tRec?.clock_out || null);
                   const tHrs = emp.id === currentUser.id
                     ? (checkedIn ? `${fmtHours(totalWorkedHours)} +` : fmtHours(totalWorkedHours))
@@ -2168,11 +2268,20 @@ const AttendanceMod = ({ currentUser }) => {
               <div className="flbl">Requested status</div>
               <input className="finp" value="Present" readOnly/>
             </div>
+            <div className="fgrp">
+              <div className="flbl">Actual clock-in time</div>
+              <input className="finp" type="time" value={corrForm.correctedClockIn} onChange={e=>setCorrForm(p=>({...p,correctedClockIn:e.target.value}))}/>
+            </div>
+            <div className="fgrp">
+              <div className="flbl">Actual clock-out time</div>
+              <input className="finp" type="time" value={corrForm.correctedClockOut} onChange={e=>setCorrForm(p=>({...p,correctedClockOut:e.target.value}))}/>
+            </div>
             <div className="fgrp ff">
               <div className="flbl">Explanation for HR</div>
               <textarea className="ftxt" placeholder="Explain why attendance was missed even though you worked from office..." value={corrForm.reason} onChange={e=>setCorrForm(p=>({...p,reason:e.target.value}))} onInput={e=>setCorrForm(p=>({...p,reason:e.target.value}))}/>
             </div>
           </div>
+          <div style={{ marginTop:10, fontSize:11.5, color:"var(--ink4)" }}>Only fill in the time(s) that were actually missed — leave the other blank if it was already recorded correctly.</div>
           {corrError && <div style={{ marginTop:12, padding:"10px 12px", background:"var(--red-soft)", border:"1px solid rgba(220,38,38,0.2)", borderRadius:"var(--r8)", fontSize:12, color:"var(--red)", fontWeight:600 }}>{corrError}</div>}
           <div style={{ marginTop:12, padding:"10px 12px", background:"var(--amber-soft)", border:"1px solid rgba(176,96,16,0.2)", borderRadius:"var(--r8)", fontSize:12, color:"var(--amber)", display:"flex", alignItems:"center", gap:8 }}>
             <Icon n="shield" s={13}/> Only the HR department can approve and mark this attendance as present.
@@ -2205,9 +2314,11 @@ const AttendanceMod = ({ currentUser }) => {
 // ─── LEAVE MODULE ─────────────────────────────────────────────────────────────
 // Handles leave applications, approval workflow, balance display, and the
 // monthly leave calendar. Visibility of requests is scoped by access level.
-const LeaveMod = ({ currentUser }) => {
+const LeaveMod = ({ currentUser, deepLink }) => {
   const visibleEmps = getVisibleEmps(currentUser);
-  const [tab, setTab] = useState("my");
+  // "my" | "calendar" | "corrections" (the approvals queue, despite the name) — mirrored
+  // to ?tab= in the URL; deepLink lets a notification click jump straight to a sub-tab.
+  const [tab, setTab] = useUrlTab("my", deepLink);
   // Leave requests loaded from API
   const [reqs, setReqs] = useState([]);
   const [reqsLoading, setReqsLoading] = useState(true);
@@ -2304,6 +2415,14 @@ const LeaveMod = ({ currentUser }) => {
       const data = await res.json();
       if (!res.ok) { setFormError(data.detail || "Failed to submit."); return; }
       setReqs(p => [data.leaveRequest, ...p]);
+      // Auto-approved submissions (a Director applying for themselves) increment
+      // leave_used on the server immediately — refresh the balance stat cards/bars
+      // now too, or they'd keep showing the pre-submission balance until reload.
+      if (autoApprove && form.empId === currentUser.id) {
+        apiFetch(`${API_URL}/api/leaves/balance/${currentUser.id}`)
+          .then(r => r.json())
+          .then(d => setMyBalance((d.balances || []).map(b => ({ type: b.leave_type, total: b.total, used: b.used, color: b.color }))));
+      }
       setModal(false);
       setForm({ type:"Earned Leave", from:"", to:"", reason:"", empId:currentUser.id });
       setTab("my");
@@ -2529,7 +2648,7 @@ const LeaveMod = ({ currentUser }) => {
 // ─── TIME LOG MODULE ──────────────────────────────────────────────────────────
 // Allows employees to log hours by project and task. Timesheets auto-submit at 40h.
 // HR reviewers see a separate "Review" tab to approve/reject submitted sheets.
-const TimeLogMod = ({ currentUser }) => {
+const TimeLogMod = ({ currentUser, deepLink }) => {
   // Department-specific project list — falls back to Technology if dept not mapped.
   const deptProjs = DEPT_PROJS[currentUser.dept] || DEPT_PROJS["Technology"];
   // Entries and sheet for current user's selected week.
@@ -2543,7 +2662,7 @@ const TimeLogMod = ({ currentUser }) => {
   const [allSheets, setAllSheets] = useState(null);
   // Currently displayed week (Monday date string).
   const [selectedWeek, setSelectedWeek] = useState(THIS_WEEK);
-  const [tab, setTab] = useState("log");
+  const [tab, setTab] = useUrlTab("log", deepLink);
   const [modal, setModal] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState({});
   const [form, setForm] = useState({ date:TODAY_STR, project:deptProjs[0].name, subtask:deptProjs[0].subtasks[0], hours:"", notes:"" });
@@ -2833,13 +2952,38 @@ const defaultPayDateForMonth = (month) => {
   // (Mon–Fri stays as-is)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
+// Counts Monday–Friday days in a calendar month (monthNum is 1-indexed: 1=Jan).
+// Does not exclude company holidays — purely weekday count, same convention
+// AttendanceMod's countWorkDays() uses for the monthly stats card.
+const countWorkingDaysInMonth = (year, monthNum) => {
+  const days = new Date(year, monthNum, 0).getDate();
+  let n = 0;
+  for (let d = 1; d <= days; d++) {
+    const dow = new Date(year, monthNum - 1, d).getDay();
+    if (dow !== 0 && dow !== 6) n++;
+  }
+  return n;
+};
+const defaultTotalWorkDaysForMonth = (month) => {
+  const { monthIndex, year } = parsePayrollMonth(month);
+  return countWorkingDaysInMonth(year, monthIndex + 1);
+};
 const fiscalMonthNumber = (month) => {
   const { monthIndex } = parsePayrollMonth(month);
   return monthIndex >= 3 ? monthIndex - 2 : monthIndex + 10;
 };
-const payrollHistoryForMonths = (months) => months.map((month, i) => ({
+// Converts a DB date string ("2026-05-01") back into a payroll month label ("May 2026").
+// Parsed manually (not via `new Date(iso)`) so a UTC-midnight date string never
+// shifts a day backward in negative-UTC-offset timezones.
+const monthLabelFromISODate = (isoDate) => {
+  const [y, m] = String(isoDate).split("-").map(Number);
+  return `${MONTH_NAMES[m - 1]} ${y}`;
+};
+// payrollRuns: optional map of month label → manually-set pay date (from /api/payroll/runs),
+// so the "Credited" date reflects a custom pay date once one has been saved for that month.
+const payrollHistoryForMonths = (months, payrollRuns = {}) => months.map((month, i) => ({
   month,
-  credited:defaultPayDateForMonth(month),
+  credited:payrollRuns[month] || defaultPayDateForMonth(month),
   status:i === 0 ? "current" : "paid",
   remarks:i === 0 ? "Current payroll cycle" : "Archived payslip available",
 }));
@@ -2907,7 +3051,9 @@ const calcPayroll = (emp, inputs = {}, customFields = [], structure = DEFAULT_ST
   const payrollMonth = inputs.month || CURRENT_PAYROLL_MONTH;
   const [monthName, year] = String(payrollMonth).split(" "); // e.g. "March 2025"
   const monthIndex = MONTH_NAMES.indexOf(monthName);  // MONTH_NAMES is already defined above
-  const totalWorkDays = new Date(parseInt(year), monthIndex + 1, 0).getDate();
+  // Working days (Mon–Fri), not calendar days — respects a manual "Total Work Days"
+  // override from the Payroll Run form if one was explicitly set.
+  const totalWorkDays = inputs.totalWorkDays ? clampNum(inputs.totalWorkDays, 1, 31) : countWorkingDaysInMonth(parseInt(year), monthIndex + 1);
   const payableDays = totalWorkDays - lopDays;
   // Convert annual CTC (in LPA) to a monthly rupee figure.
   const ctcMonthly = Math.round((emp.ctcLPA * 100000) / 12);
@@ -3018,34 +3164,19 @@ const calcPayroll = (emp, inputs = {}, customFields = [], structure = DEFAULT_ST
 const payslipHTMLDoc = (data) => {
   const fmt = n => `₹${Math.round(Math.abs(n || 0)).toLocaleString("en-IN")}`;
   const esc = s => String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-  const pfRate = (parseFloat(getStat("pf_rate_employee", 0.12)) * 100).toFixed(0);
-  const pfCeil = parseFloat(getStat("pf_ceiling", 15000)).toLocaleString("en-IN");
-  const esiRate = (parseFloat(getStat("esi_rate_employee", 0.0075)) * 100).toFixed(2);
   const logoURL = window.location.origin + "/doloxe-logo.png";
 
   const earningRows = data.earnings.map(r => `
     <tr>
       <td class="comp">${esc(r.label)}</td>
       <td class="amt">${fmt(r.amount)}</td>
-      <td class="amt">${fmt(r.amount * 12)}</td>
-      <td class="note"></td>
     </tr>`).join("");
 
-  const deductRows = [...data.statutory, ...data.voluntary].map(r => {
-    let note = "";
-    if (r.code === "PF")  note = `${pfRate}% of ₹${pfCeil} cap`;
-    if (r.code === "ESI") note = `${esiRate}% of gross`;
-    return `
+  const deductRows = [...data.statutory, ...data.voluntary].map(r => `
     <tr>
       <td class="comp">${esc(r.label)}</td>
       <td class="amt">${fmt(r.amount)}</td>
-      <td class="amt">${fmt(r.amount * 12)}</td>
-      <td class="note">${note}</td>
-    </tr>`;
-  }).join("");
-
-  const ytdItems = [["Gross", data.ytd.gross], ["Net", data.ytd.net], ["PF", data.ytd.pf], ["TDS", data.ytd.tax]];
-  const taxItems = [["Taxable Income", data.annualTaxableIncome], ["Annual Tax", data.annualTax], ["Monthly TDS", data.tdsMonthly], ["Employer PF", data.pfEmployer]];
+    </tr>`).join("");
 
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8">
@@ -3085,7 +3216,6 @@ table.sal thead th:not(:first-child){text-align:right}
 .sec-ded  td{background:#FEF2F2;color:#DC2626}
 td.comp{padding:5px 10px;font-size:9pt;color:#374151;border-bottom:1px dashed #E5E7EB}
 td.amt{padding:5px 10px;text-align:right;font-size:9pt;font-weight:500;border-bottom:1px dashed #E5E7EB;white-space:nowrap}
-td.note{padding:5px 10px;text-align:right;font-size:7.5pt;color:#9CA3AF;border-bottom:1px dashed #E5E7EB;white-space:nowrap}
 .tot-earn td{font-weight:700;font-size:10pt;background:#ECFDF5;color:#065F46;padding:6px 10px;border-top:2px solid #D1FAE5}
 .tot-earn td:not(:first-child){text-align:right}
 .tot-ded  td{font-weight:700;font-size:10pt;background:#FEF2F2;color:#991B1B;padding:6px 10px;border-top:2px solid #FECACA}
@@ -3094,25 +3224,12 @@ td.note{padding:5px 10px;text-align:right;font-size:7.5pt;color:#9CA3AF;border-b
 .net-band{background:#0D0D0E;color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center}
 .net-lbl{font-size:7pt;color:#9CA3AF;font-weight:700;letter-spacing:1px;margin-bottom:3px}
 .net-month{font-size:19pt;font-weight:900}
-.net-annual{font-size:13pt;font-weight:700}
-/* Info row (Pay Date / Mode / Status / Regime) */
+/* Info row (Pay Date / Mode / Status) */
 .info-row{display:flex;border-bottom:1px solid #E5E7EB}
 .info-cell{flex:1;padding:7px 12px;border-right:1px solid #E5E7EB}
 .info-cell:last-child{border-right:none}
 .info-lbl{font-size:7pt;color:#9CA3AF;font-weight:700;text-transform:uppercase;margin-bottom:2px;letter-spacing:0.5px}
 .info-val{font-size:9.5pt;font-weight:700}
-/* YTD + Tax section */
-.summary-row{display:flex;border-bottom:1px solid #E5E7EB}
-.ytd-pane{flex:1;padding:10px 14px;background:#EFF6FF;border-right:1px solid #BFDBFE}
-.tax-pane{flex:1;padding:10px 14px;background:#FFFBEB}
-.pane-lbl{font-size:7pt;font-weight:800;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
-.ytd-pane .pane-lbl{color:#1D4ED8}
-.tax-pane .pane-lbl{color:#B45309}
-.pane-items{display:flex;gap:18px;flex-wrap:wrap}
-.pane-item{}
-.pane-item-lbl{font-size:7pt;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:2px}
-.ytd-pane .pane-item-val{font-size:10pt;font-weight:800;color:#1D4ED8}
-.tax-pane .pane-item-val{font-size:10pt;font-weight:800;color:#B45309}
 .footer{padding:8px 18px;font-size:7.5pt;color:#9CA3AF;text-align:center;border-top:1px solid #E5E7EB}
 </style>
 </head><body>
@@ -3157,28 +3274,22 @@ td.note{padding:5px 10px;text-align:right;font-size:7.5pt;color:#9CA3AF;border-b
 <table class="sal">
   <thead>
     <tr>
-      <th style="text-align:left;width:44%">Component</th>
-      <th style="width:18%">Monthly (₹)</th>
-      <th style="width:18%">Annual (₹)</th>
-      <th style="width:20%">Notes</th>
+      <th style="text-align:left;width:70%">Component</th>
+      <th style="width:30%">Amount (₹)</th>
     </tr>
   </thead>
   <tbody>
-    <tr class="sec-hdr sec-earn"><td colspan="4">Earnings</td></tr>
+    <tr class="sec-hdr sec-earn"><td colspan="2">Earnings</td></tr>
     ${earningRows}
     <tr class="tot-earn">
       <td>Gross Earnings</td>
       <td>${fmt(data.grossEarnings)}</td>
-      <td>${fmt(data.grossEarnings * 12)}</td>
-      <td></td>
     </tr>
-    <tr class="sec-hdr sec-ded"><td colspan="4">Deductions</td></tr>
+    <tr class="sec-hdr sec-ded"><td colspan="2">Deductions</td></tr>
     ${deductRows}
     <tr class="tot-ded">
       <td>Total Deductions</td>
       <td>${fmt(data.totalDeductions)}</td>
-      <td>${fmt(data.totalDeductions * 12)}</td>
-      <td></td>
     </tr>
   </tbody>
 </table>
@@ -3188,30 +3299,11 @@ td.note{padding:5px 10px;text-align:right;font-size:7.5pt;color:#9CA3AF;border-b
     <div class="net-lbl">NET TAKE-HOME</div>
     <div class="net-month">${fmt(data.netPay)} <span style="font-size:10pt;font-weight:400;color:#9CA3AF">/ month</span></div>
   </div>
-  <div style="text-align:right">
-    <div style="font-size:8pt;color:#9CA3AF;margin-bottom:2px">Annual</div>
-    <div class="net-annual">${fmt(data.netPay * 12)} <span style="font-size:8pt;font-weight:400;color:#9CA3AF">/ year</span></div>
-  </div>
 </div>
 
 <div class="info-row">
-  ${[["Pay Date",data.payDate],["Payment Mode",data.paymentMode||"Bank Transfer"],["Status",data.payrollStatus],["Tax Regime",data.taxRegime||"New Regime"]].map(([l,v])=>
+  ${[["Pay Date",data.payDate],["Payment Mode",data.paymentMode||"Bank Transfer"],["Status",data.payrollStatus]].map(([l,v])=>
     `<div class="info-cell"><div class="info-lbl">${l}</div><div class="info-val">${esc(String(v))}</div></div>`).join("")}
-</div>
-
-<div class="summary-row">
-  <div class="ytd-pane">
-    <div class="pane-lbl">Year-to-Date</div>
-    <div class="pane-items">
-      ${ytdItems.map(([l,v])=>`<div class="pane-item"><div class="pane-item-lbl">${l}</div><div class="pane-item-val">${fmt(v)}</div></div>`).join("")}
-    </div>
-  </div>
-  <div class="tax-pane">
-    <div class="pane-lbl">Tax Computation</div>
-    <div class="pane-items">
-      ${taxItems.map(([l,v])=>`<div class="pane-item"><div class="pane-item-lbl">${l}</div><div class="pane-item-val">${fmt(v)}</div></div>`).join("")}
-    </div>
-  </div>
 </div>
 
 <div class="footer">This is a system-generated payslip and does not require a signature. &nbsp;|&nbsp; For queries, contact DOLOXE Finance Operations.</div>
@@ -3285,10 +3377,6 @@ const payslipEmailHtml = (data) => {
               </td>
             </tr>
           </table>
-          <div style="margin-top:22px;background:#f8faff;border:1px solid #dbe5ff;border-radius:10px;padding:14px 16px">
-            <div style="font-size:11px;font-weight:900;color:#6b7280;text-transform:uppercase;margin-bottom:8px">Year-to-Date</div>
-            <div style="font-size:13px;color:#374151">Gross: <b>${htmlEscape(money(data.ytd.gross))}</b> &nbsp; Net: <b>${htmlEscape(money(data.ytd.net))}</b> &nbsp; PF: <b>${htmlEscape(money(data.ytd.pf))}</b> &nbsp; TDS: <b>${htmlEscape(money(data.ytd.tax))}</b></div>
-          </div>
           <div style="font-size:12px;color:#6b7280;margin-top:20px">A PDF copy of this payslip is attached. This is a system-generated payslip and does not require a signature.</div>
         </div>
       </div>
@@ -3316,11 +3404,11 @@ const dbFieldToFrontend = (f) => ({
   createdAt: f.created_at || "",
 });
 
-const SalaryMod = ({ currentUser }) => {
+const SalaryMod = ({ currentUser, deepLink }) => {
   const canRunTeamPayroll = canOperatePayroll(currentUser);
   const canRunOwnPayroll = canRunTeamPayroll || canOperateOwnPayroll(currentUser);
   const scopedEmps = canRunTeamPayroll ? ALL_USERS : [currentUser];
-  const [tab, setTab] = useState(canRunOwnPayroll ? "run" : "slip");
+  const [tab, setTab] = useUrlTab(canRunOwnPayroll ? "run" : "slip", deepLink);
   // ── Salary structure — seeded from app-level load, refreshable via Configure tab ──
   const [structure, setStructure] = useState(() => APP_STRUCTURE || DEFAULT_STRUCTURE);
   const [structureEdit, setStructureEdit] = useState({});
@@ -3370,9 +3458,9 @@ const SalaryMod = ({ currentUser }) => {
   const [selId, setSelId] = useState(currentUser.id);
   const [month, setMonth] = useState(CURRENT_PAYROLL_MONTH);
   const BLANK_INPUTS = {
-    
     pfOverride:"", esiOverride:"", ptOverride:"", tdsOverride:"",
-    payDate:defaultPayDateForMonth(CURRENT_PAYROLL_MONTH), paymentMode:"",
+    payDate:defaultPayDateForMonth(CURRENT_PAYROLL_MONTH),
+    totalWorkDays:defaultTotalWorkDaysForMonth(CURRENT_PAYROLL_MONTH), paymentMode:"",
     payrollStatus:"Draft", taxRegime:"New Regime", salaryHold:false, remarks:"",
   };
   const [inputs, setInputs] = useState(BLANK_INPUTS);
@@ -3385,13 +3473,28 @@ const SalaryMod = ({ currentUser }) => {
   const [emailTo, setEmailTo] = useState("");
   const [emailStatus, setEmailStatus] = useState("");
   const [emailSending, setEmailSending] = useState(false);
+  // Manually-set pay dates, persisted server-side (one per month, shared across every
+  // employee/session) — map of month label ("May 2026") → "YYYY-MM-DD". Falls back to
+  // defaultPayDateForMonth() for any month that hasn't had a custom date saved yet.
+  const [payrollRuns, setPayrollRuns] = useState({});
+  useEffect(() => {
+    apiFetch(`${API}/api/payroll/runs`)
+      .then(r => r.json())
+      .then(({ payrollRuns: rows }) => {
+        const map = {};
+        (rows || []).forEach(r => { if (r.payroll_month && r.pay_date) map[monthLabelFromISODate(r.payroll_month)] = r.pay_date; });
+        setPayrollRuns(map);
+        if (map[month]) setInputs(p => ({ ...p, payDate:map[month] }));
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const emp = scopedEmps.find(e => e.id === selId) || currentUser;
   const preview = calcPayroll(emp, { ...inputs, month }, customFields, structure);
   const canSeeSalary = canViewPayrollOf(currentUser, emp.id);
   const canEditPayroll = canRunOwnPayroll;
   const archiveYears = [...new Set(PAYROLL_MONTHS.map(m => String(parsePayrollMonth(m).year)))];
   const archiveMonths = PAYROLL_MONTHS.filter(m => String(parsePayrollMonth(m).year) === archiveYear);
-  const payrollHistory = payrollHistoryForMonths(PAYROLL_MONTHS.slice(0, 18));
+  const payrollHistory = payrollHistoryForMonths(PAYROLL_MONTHS.slice(0, 18), payrollRuns);
   const input = (key, min = 0, max = 999999) => ({
     value:inputs[key],
     disabled:!canEditPayroll,
@@ -3413,7 +3516,8 @@ const SalaryMod = ({ currentUser }) => {
     onChange:e => setInputs(p => ({ ...p, [key]:e.target.value })),
   });
   const setSlipFor = (employee, customInputs = {}) => {
-    const data = calcPayroll(employee, { ...inputs, ...customInputs, month }, customFields, structure);
+    const mergedInputs = { ...inputs, ...customInputs };
+    const data = calcPayroll(employee, { ...mergedInputs, month }, customFields, structure);
     setSlip(data);
     setTab("slip");
     // Save line items to DB
@@ -3426,16 +3530,27 @@ const SalaryMod = ({ currentUser }) => {
       method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({ employeeId:employee.id, payrollMonth:month, lines }),
     }).catch(()=>{});
+    // Persist this month's pay date so it's the same for every employee/session that
+    // views this payslip later — not just the local form state of whoever generated it.
+    if (mergedInputs.payDate) {
+      apiFetch(`${API}/api/payroll/runs/${encodeURIComponent(month)}`, {
+        method:"PUT", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ payDate:mergedInputs.payDate, processedBy:currentUser.id }),
+      }).catch(()=>{});
+      setPayrollRuns(p => ({ ...p, [month]:mergedInputs.payDate }));
+    }
   };
   const selectPayslipMonth = (nextMonth, employee = ALL_USERS.find(e => e.id === slip.employeeId) || emp) => {
-    const nextPayDate = defaultPayDateForMonth(nextMonth);
+    const nextPayDate = payrollRuns[nextMonth] || defaultPayDateForMonth(nextMonth);
+    const nextTotalWorkDays = defaultTotalWorkDaysForMonth(nextMonth);
     setMonth(nextMonth);
     setArchiveYear(String(parsePayrollMonth(nextMonth).year));
-    setInputs(p => ({ ...p, payDate:nextPayDate }));
+    setInputs(p => ({ ...p, payDate:nextPayDate, totalWorkDays:nextTotalWorkDays }));
     setSlip(calcPayroll(employee, {
       ...inputs,
       month:nextMonth,
       payDate:nextPayDate,
+      totalWorkDays:nextTotalWorkDays,
       payrollStatus:nextMonth === PAYROLL_MONTHS[0] ? "Current" : "Paid",
     }, customFields, structure));
   };
@@ -3553,20 +3668,12 @@ const SalaryMod = ({ currentUser }) => {
     const allowed = canViewPayrollOf(currentUser, owner.id);
     const released= isPayslipReleased(data);
 
-    const CompRow = ({ label, monthly, annual, note, bold, greenRow, redRow }) => (
-      <tr style={{ background: greenRow ? "var(--green-soft)" : redRow ? "var(--red-soft)" : "transparent" }}>
-        <td style={{ padding:"6px 10px 6px 14px", fontSize:12.5, fontWeight: bold ? 700 : 400, color: greenRow ? "var(--green)" : redRow ? "var(--red)" : "var(--ink2)" }}>{label}</td>
-        <td style={{ padding:"6px 10px", fontSize:12.5, fontWeight: bold ? 700 : 500, textAlign:"right", color: greenRow ? "var(--green)" : redRow ? "var(--red)" : "var(--ink)" }}>{money(monthly)}</td>
-        <td style={{ padding:"6px 10px", fontSize:12.5, fontWeight: bold ? 700 : 500, textAlign:"right", color: greenRow ? "var(--green)" : redRow ? "var(--red)" : "var(--ink)" }}>{money(annual)}</td>
-        <td style={{ padding:"6px 10px 6px 4px", fontSize:11, color:"var(--ink4)", textAlign:"right" }}>{note || ""}</td>
-      </tr>
-    );
     const ColHead = ({ label, right }) => (
       <th style={{ padding:"6px 10px", fontSize:10.5, fontWeight:700, color:"var(--ink4)", textAlign: right ? "right" : "left", borderBottom:"2px solid var(--ink)", background:"var(--raised)", whiteSpace:"nowrap" }}>{label}</th>
     );
 
     return (
-      <div style={{ background:"var(--surface)", border:"1px solid var(--brd)", borderRadius:"var(--r12)", overflow:"hidden" }}>
+      <div style={{ maxWidth:760, margin:"0 auto", background:"var(--surface)", border:"1px solid var(--brd)", borderRadius:"var(--r12)", overflow:"hidden" }}>
         {/* Header */}
         <div className="slip-h">
           <div style={{ display:"flex", justifyContent:"space-between", gap:16 }}>
@@ -3618,85 +3725,54 @@ const SalaryMod = ({ currentUser }) => {
                   <thead>
                     <tr>
                       <ColHead label="Component"/>
-                      <ColHead label="Monthly (₹)" right/>
-                      <ColHead label="Annual (₹)" right/>
-                      <ColHead label="Notes" right/>
+                      <ColHead label="Amount (₹)" right/>
                     </tr>
                   </thead>
                   <tbody>
                     {/* Earnings */}
-                    <tr><td colSpan={4} style={{ padding:"8px 14px 4px", fontSize:10.5, fontWeight:700, color:"var(--green)", letterSpacing:0.5, background:"var(--green-soft)", borderTop:"1px solid var(--brd)" }}>EARNINGS</td></tr>
+                    <tr><td colSpan={2} style={{ padding:"8px 14px 4px", fontSize:10.5, fontWeight:700, color:"var(--green)", letterSpacing:0.5, background:"var(--green-soft)", borderTop:"1px solid var(--brd)" }}>EARNINGS</td></tr>
                     {data.earnings.map(r => (
                       <tr key={r.label} style={{ borderBottom:"1px dashed var(--brd)" }}>
                         <td style={{ padding:"5px 10px 5px 14px", fontSize:12.5, color:"var(--ink2)" }}>{r.label}</td>
                         <td style={{ padding:"5px 10px", fontSize:12.5, textAlign:"right", fontWeight:500, color:"var(--ink)" }}>{money(r.amount)}</td>
-                        <td style={{ padding:"5px 10px", fontSize:12.5, textAlign:"right", fontWeight:500, color:"var(--ink)" }}>{money(r.amount * 12)}</td>
-                        <td style={{ padding:"5px 10px 5px 4px", fontSize:11, color:"var(--ink4)", textAlign:"right" }}></td>
                       </tr>
                     ))}
-                    <CompRow label="Gross Earnings" monthly={data.grossEarnings} annual={data.grossEarnings * 12} greenRow bold/>
+                    <tr style={{ background:"var(--green-soft)" }}>
+                      <td style={{ padding:"6px 10px 6px 14px", fontSize:12.5, fontWeight:700, color:"var(--green)" }}>Gross Earnings</td>
+                      <td style={{ padding:"6px 10px", fontSize:12.5, fontWeight:700, textAlign:"right", color:"var(--green)" }}>{money(data.grossEarnings)}</td>
+                    </tr>
 
                     {/* Deductions */}
-                    <tr><td colSpan={4} style={{ padding:"8px 14px 4px", fontSize:10.5, fontWeight:700, color:"var(--red)", letterSpacing:0.5, background:"var(--red-soft)", borderTop:"1px solid var(--brd)" }}>DEDUCTIONS</td></tr>
-                    {[...data.statutory, ...data.voluntary].map(r => {
-                      let note = "";
-                      if (r.code === "PF")  note = `${(getStat("pf_rate_employee", 0.12)*100).toFixed(0)}% of ₹${getStat("pf_ceiling",15000).toLocaleString("en-IN")} cap`;
-                      if (r.code === "ESI") note = `${(getStat("esi_rate_employee",0.0075)*100).toFixed(2)}% of gross`;
-                      return (
-                        <tr key={r.label} style={{ borderBottom:"1px dashed var(--brd)" }}>
-                          <td style={{ padding:"5px 10px 5px 14px", fontSize:12.5, color:"var(--ink2)" }}>{r.label}</td>
-                          <td style={{ padding:"5px 10px", fontSize:12.5, textAlign:"right", fontWeight:500, color:"var(--ink)" }}>{money(r.amount)}</td>
-                          <td style={{ padding:"5px 10px", fontSize:12.5, textAlign:"right", fontWeight:500, color:"var(--ink)" }}>{money(r.amount * 12)}</td>
-                          <td style={{ padding:"5px 10px 5px 4px", fontSize:11, color:"var(--ink4)", textAlign:"right" }}>{note}</td>
-                        </tr>
-                      );
-                    })}
-                    <CompRow label="Total Deductions" monthly={data.totalDeductions} annual={data.totalDeductions * 12} redRow bold/>
+                    <tr><td colSpan={2} style={{ padding:"8px 14px 4px", fontSize:10.5, fontWeight:700, color:"var(--red)", letterSpacing:0.5, background:"var(--red-soft)", borderTop:"1px solid var(--brd)" }}>DEDUCTIONS</td></tr>
+                    {[...data.statutory, ...data.voluntary].map(r => (
+                      <tr key={r.label} style={{ borderBottom:"1px dashed var(--brd)" }}>
+                        <td style={{ padding:"5px 10px 5px 14px", fontSize:12.5, color:"var(--ink2)" }}>{r.label}</td>
+                        <td style={{ padding:"5px 10px", fontSize:12.5, textAlign:"right", fontWeight:500, color:"var(--ink)" }}>{money(r.amount)}</td>
+                      </tr>
+                    ))}
+                    <tr style={{ background:"var(--red-soft)" }}>
+                      <td style={{ padding:"6px 10px 6px 14px", fontSize:12.5, fontWeight:700, color:"var(--red)" }}>Total Deductions</td>
+                      <td style={{ padding:"6px 10px", fontSize:12.5, fontWeight:700, textAlign:"right", color:"var(--red)" }}>{money(data.totalDeductions)}</td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
             </div>
 
             {/* Net Take-Home band */}
-            <div style={{ margin:"0", padding:"14px 20px", background:"var(--ink2)", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12 }}>
-              <div>
-                <div style={{ fontSize:10, color:"#9CA3AF", fontWeight:700, letterSpacing:1, marginBottom:4 }}>NET TAKE-HOME</div>
-                <div style={{ fontSize:24, fontWeight:800, color:"#FFFFFF" }}>{money(data.netPay)} <span style={{ fontSize:12, color:"#9CA3AF", fontWeight:400 }}>/ month</span></div>
-              </div>
-              <div style={{ textAlign:"right" }}>
-                <div style={{ fontSize:10, color:"#9CA3AF", marginBottom:4 }}>Annual</div>
-                <div style={{ fontSize:18, fontWeight:700, color:"#FFFFFF" }}>{money(data.netPay * 12)} / year</div>
-              </div>
+            <div style={{ margin:"0", padding:"14px 20px", background:"var(--ink2)" }}>
+              <div style={{ fontSize:10, color:"#9CA3AF", fontWeight:700, letterSpacing:1, marginBottom:4 }}>NET TAKE-HOME</div>
+              <div style={{ fontSize:24, fontWeight:800, color:"#FFFFFF" }}>{money(data.netPay)} <span style={{ fontSize:12, color:"#9CA3AF", fontWeight:400 }}>/ month</span></div>
             </div>
 
             {/* Payment & Status info */}
-            <div className="g4" style={{ borderTop:"1px solid var(--brd)", borderBottom:"1px solid var(--brd)" }}>
-              {[["Pay Date", data.payDate], ["Payment Mode", data.paymentMode || "—"], ["Status", data.payrollStatus], ["Tax Regime", data.taxRegime]].map(([l, v], i) => (
-                <div key={l} style={{ padding:"10px 14px", borderRight: i < 3 ? "1px solid var(--brd)" : "none" }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", borderTop:"1px solid var(--brd)", borderBottom:"1px solid var(--brd)" }}>
+              {[["Pay Date", data.payDate], ["Payment Mode", data.paymentMode || "—"], ["Status", data.payrollStatus]].map(([l, v], i) => (
+                <div key={l} style={{ padding:"10px 14px", borderRight: i < 2 ? "1px solid var(--brd)" : "none" }}>
                   <div className="if-l">{l}</div>
                   <div style={{ fontWeight:700, fontSize:12.5 }}>{v}</div>
                 </div>
               ))}
-            </div>
-
-            {/* YTD + Tax summary */}
-            <div className="g2" style={{ borderBottom:"1px solid var(--brd)" }}>
-              <div style={{ padding:"12px 14px", borderRight:"1px solid var(--brd)", background:"var(--accent-soft)" }}>
-                <div className="flbl" style={{ color:"var(--accent)", marginBottom:6 }}>Year-to-Date</div>
-                <div style={{ display:"flex", gap:20, flexWrap:"wrap" }}>
-                  {[["Gross", data.ytd.gross], ["Net", data.ytd.net], ["PF", data.ytd.pf], ["TDS", data.ytd.tax]].map(([l, v]) => (
-                    <div key={l}><div className="if-l">{l}</div><div style={{ fontWeight:700, color:"var(--accent)", fontSize:13 }}>{money(v)}</div></div>
-                  ))}
-                </div>
-              </div>
-              <div style={{ padding:"12px 14px", background:"var(--amber-soft)" }}>
-                <div className="flbl" style={{ color:"var(--amber)", marginBottom:6 }}>Tax Computation</div>
-                <div style={{ display:"flex", gap:16, flexWrap:"wrap" }}>
-                  {[["Taxable", data.annualTaxableIncome], ["Annual Tax", data.annualTax], ["Monthly TDS", data.tdsMonthly], ["Employer PF", data.pfEmployer]].map(([l, v]) => (
-                    <div key={l}><div className="if-l">{l}</div><div style={{ fontWeight:700, color:"var(--amber)", fontSize:13 }}>{money(v)}</div></div>
-                  ))}
-                </div>
-              </div>
             </div>
           </>
         ) : (
@@ -3710,7 +3786,7 @@ const SalaryMod = ({ currentUser }) => {
     <div>
       <div className="ph">
         <div><div className="ph-eyebrow">Finance</div><div className="ph-title">Payroll</div><div className="ph-sub">{canRunTeamPayroll ? "Finance operations workspace for payroll edits, runs and statutory summaries" : canRunOwnPayroll ? "Personal payroll run workspace. Company payroll is managed by Finance operations." : "Your monthly payslip. Payroll edits and runs are managed by Finance operations."}</div></div>
-        <select className="fsel" style={{ width:180 }} value={month} onChange={e=>selectPayslipMonth(e.target.value)}>
+        <select className="fsel" style={{ width:180, alignSelf:"center" }} value={month} onChange={e=>selectPayslipMonth(e.target.value)}>
           {PAYROLL_MONTHS.map(m=><option key={m}>{m}</option>)}
         </select>
       </div>
@@ -3831,14 +3907,14 @@ const SalaryMod = ({ currentUser }) => {
             </div>
             <div className="cb" style={{ paddingTop:12 }}>
               {canRunTeamPayroll&&<div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:12 }}>{scopedEmps.map(e=><div key={e.id} className={`pill${slip.employeeId===e.id?" active":""}`} onClick={()=>selectPayslipMonth(month, e)}>{e.firstName}</div>)}</div>}
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(132px,1fr))", gap:8 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))", gap:8 }}>
                 {archiveMonths.map(m => {
                   const isActive = slip.month === m;
-                  const sample = calcPayroll(ALL_USERS.find(e => e.id === slip.employeeId) || emp, { month:m, payDate:defaultPayDateForMonth(m), payrollStatus:m === PAYROLL_MONTHS[0] ? "Current" : "Paid" }, customFields, structure);
+                  const sample = calcPayroll(ALL_USERS.find(e => e.id === slip.employeeId) || emp, { month:m, payDate:payrollRuns[m] || defaultPayDateForMonth(m), payrollStatus:m === PAYROLL_MONTHS[0] ? "Current" : "Paid" }, customFields, structure);
                   return (
-                    <button key={m} className={`btn${isActive ? " btn-p" : ""}`} style={{ justifyContent:"space-between", padding:"9px 10px" }} onClick={()=>selectPayslipMonth(m)}>
+                    <button key={m} className={`btn${isActive ? " btn-p" : ""}`} style={{ flexDirection:"column", alignItems:"flex-start", gap:3, padding:"9px 12px" }} onClick={()=>selectPayslipMonth(m)}>
                       <span>{m}</span>
-                      <span style={{ fontFamily:"var(--mono)", fontSize:11 }}>{money(sample.netPay)}</span>
+                      <span style={{ fontFamily:"var(--mono)", fontSize:11, opacity:isActive ? 0.9 : 0.7 }}>{money(sample.netPay)}</span>
                     </button>
                   );
                 })}
@@ -3867,7 +3943,7 @@ const SalaryMod = ({ currentUser }) => {
           </div>
           <div className="card" style={{ marginTop:14 }}>
             <div className="ch"><div className="ct">Employee Payslip Archive · {month}</div><div style={{ display:"flex", gap:5 }}>{departments.map(d=><div key={d} className={`pill${historyFilter===d?" active":""}`} onClick={()=>setHistoryFilter(d)}>{d}</div>)}</div></div>
-            <div className="tw"><table><thead><tr>{["Employee","Dept","Monthly Gross","Net Pay","YTD Net","Actions"].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{scopedEmps.filter(e=>historyFilter==="All"||e.dept===historyFilter).map(e=>{ const data=calcPayroll(e,{ month, payDate:defaultPayDateForMonth(month), payrollStatus:month === PAYROLL_MONTHS[0] ? "Current" : "Paid" },customFields,structure); const allowed=canViewPayrollOf(currentUser,e.id); return <tr key={e.id}><td><div style={{ display:"flex", alignItems:"center", gap:8 }}><div className="avt" style={{ width:28, height:28, background:e.color }}>{e.firstName[0]}{e.lastName[0]}</div><div><div className="fw7">{e.name}</div><div className="t3 tsm">{e.id}</div></div></div></td><td><span className="bdg bdg-b">{e.dept}</span></td><td>{allowed ? money(data.grossEarnings) : "Confidential"}</td><td className="fw7" style={{ color:"var(--green)" }}>{allowed ? money(data.netPay) : "Confidential"}</td><td style={{ color:"var(--accent)" }}>{allowed ? money(data.ytd.net) : "Confidential"}</td><td><button className="btn btn-sm" onClick={()=>{ setSlip(data); setTab("slip"); }}><Icon n="eye" s={12}/></button></td></tr>; })}</tbody></table></div>
+            <div className="tw"><table><thead><tr>{["Employee","Dept","Monthly Gross","Net Pay","YTD Net","Actions"].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{scopedEmps.filter(e=>historyFilter==="All"||e.dept===historyFilter).map(e=>{ const data=calcPayroll(e,{ month, payDate:payrollRuns[month] || defaultPayDateForMonth(month), payrollStatus:month === PAYROLL_MONTHS[0] ? "Current" : "Paid" },customFields,structure); const allowed=canViewPayrollOf(currentUser,e.id); return <tr key={e.id}><td><div style={{ display:"flex", alignItems:"center", gap:8 }}><div className="avt" style={{ width:28, height:28, background:e.color }}>{e.firstName[0]}{e.lastName[0]}</div><div><div className="fw7">{e.name}</div><div className="t3 tsm">{e.id}</div></div></div></td><td><span className="bdg bdg-b">{e.dept}</span></td><td>{allowed ? money(data.grossEarnings) : "Confidential"}</td><td className="fw7" style={{ color:"var(--green)" }}>{allowed ? money(data.netPay) : "Confidential"}</td><td style={{ color:"var(--accent)" }}>{allowed ? money(data.ytd.net) : "Confidential"}</td><td><button className="btn btn-sm" onClick={()=>{ setSlip(data); setTab("slip"); }}><Icon n="eye" s={12}/></button></td></tr>; })}</tbody></table></div>
           </div>
         </div>
       )}
@@ -4626,8 +4702,8 @@ const OrgMod = ({ currentUser }) => {
 };
 
 // ─── PERFORMANCE ───────────────────────────────────────────────────────────────
-const PerfMod = ({ currentUser }) => {
-  const [tab, setTab] = useState("goals");
+const PerfMod = ({ currentUser, deepLink }) => {
+  const [tab, setTab] = useUrlTab("goals", deepLink);
   const [goals, setGoals] = useState([]);
   const [goalsLoading, setGoalsLoading] = useState(true);
   const [showGoalModal, setShowGoalModal] = useState(false);
@@ -5493,8 +5569,27 @@ function HRApp() {
     try { const s = localStorage.getItem("doloxe_user"); return s ? JSON.parse(s) : null; }
     catch { return null; }
   });
-  const [page, setPage] = useState(() => localStorage.getItem("doloxe_page") || "dir");
+  // URL ?page= wins over the last-used page in localStorage, so a shared/bookmarked
+  // link (or a notification click that reloaded the tab) lands on the right module.
+  const [page, setPage] = useState(() => getUrlParams().get("page") || localStorage.getItem("doloxe_page") || "dir");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // One-shot instruction telling whichever module renders next which sub-tab to land
+  // on — set by a notification click (or the page's initial ?tab=), consumed by that
+  // module's useUrlTab(), and explicitly cleared on normal sidebar navigation so a
+  // stale deep link can't keep forcing the same tab on every later visit.
+  const [pendingDeepLink, setPendingDeepLink] = useState(() => {
+    const tab = getUrlParams().get("tab");
+    return tab ? { tab, key: 0 } : null;
+  });
+  // Monotonic counter for pendingDeepLink.key — plain ref increment instead of
+  // Date.now()/Math.random(), since those read as impure in a render-reachable scope.
+  const deepLinkKeyRef = useRef(0);
+  const navigateToPage = (pid) => {
+    localStorage.setItem("doloxe_page", pid);
+    setPendingDeepLink(null);
+    setUrlParams({ page: pid, tab: null });
+    setPage(pid);
+  };
 
   // Security Settings modal state (Change Password)
   const [cpOpen, setCpOpen] = useState(false);
@@ -5566,18 +5661,24 @@ function HRApp() {
     } catch { /* network error — retain last state */ }
   }, [currentUser]);
 
+  // 5s (was 10s) — the practical ceiling for "feels real-time" without a persistent
+  // connection. A true push (WebSocket/SSE) would need one, and a long-lived connection
+  // is unreliable on Render's free tier (the same spin-down behavior that broke
+  // JWT_SECRET earlier kills any open socket too) — so this stays plain stateless
+  // polling, just tighter, and visibility-aware so a backgrounded tab doesn't keep
+  // hitting the API.
   useEffect(() => {
     const refresh = async () => {
       await Promise.all([loadNotifs(), loadPendingCounts()]);
     };
     refresh();
-    let t = setInterval(refresh, 10000);
+    let t = setInterval(refresh, 5000);
     const onVisibility = () => {
       if (document.hidden) {
         clearInterval(t);
       } else {
         refresh();
-        t = setInterval(refresh, 10000);
+        t = setInterval(refresh, 5000);
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -5648,14 +5749,26 @@ function HRApp() {
     } catch { /* ignore */ }
   };
 
+  // Maps a notification's type to exactly where approving/rejecting it lives —
+  // both the top-level module and the sub-tab inside it.
+  const NOTIF_DEST = {
+    attendance_correction: { page: "attendance", tab: "corrections" },
+    leave_request:         { page: "leaves",     tab: "corrections" }, // LeaveMod's approvals queue, internally still named "corrections"
+  };
   const handleNotifClick = (n) => {
-    const dest = n.type === "leave_request" ? "leaves" : "attendance";
-    setPage(dest);
+    const dest = NOTIF_DEST[n.type] || { page: "attendance", tab: "my" };
+    localStorage.setItem("doloxe_page", dest.page);
+    setUrlParams({ page: dest.page, tab: dest.tab });
+    // Incrementing key guarantees this always re-applies, even if the target module
+    // is already mounted on the same tab as a previous notification click.
+    deepLinkKeyRef.current += 1;
+    setPendingDeepLink({ tab: dest.tab, key: deepLinkKeyRef.current });
+    setPage(dest.page);
     setNotifOpen(false);
   };
 
   // Gate the whole app behind login: if no session, render the login screen.
-  if (!currentUser) return (<><GS/><LoginScreen onLogin={u => { localStorage.setItem("doloxe_user", JSON.stringify(u)); setCurrentUser(u); setPage("dir"); }}/></>);
+  if (!currentUser) return (<><GS/><LoginScreen onLogin={u => { localStorage.setItem("doloxe_user", JSON.stringify(u)); setCurrentUser(u); navigateToPage("dir"); }}/></>);
 
   // Force password change on first login before accessing any part of the app.
   if (currentUser.mustChangePassword) return (
@@ -5672,12 +5785,12 @@ function HRApp() {
     switch(page) {
       case "dir":        return <DirectoryMod currentUser={currentUser} onCurrentUserUpdate={u=>{ localStorage.setItem("doloxe_user",JSON.stringify(u)); setCurrentUser(u); }}/>;
       case "org":        return <OrgMod currentUser={currentUser}/>;
-      case "attendance": return <AttendanceMod currentUser={currentUser}/>;
-      case "leaves":     return <LeaveMod currentUser={currentUser}/>;
-      case "timelog":    return <TimeLogMod currentUser={currentUser}/>;
-      case "perf":       return <PerfMod currentUser={currentUser}/>;
+      case "attendance": return <AttendanceMod currentUser={currentUser} deepLink={pendingDeepLink}/>;
+      case "leaves":     return <LeaveMod currentUser={currentUser} deepLink={pendingDeepLink}/>;
+      case "timelog":    return <TimeLogMod currentUser={currentUser} deepLink={pendingDeepLink}/>;
+      case "perf":       return <PerfMod currentUser={currentUser} deepLink={pendingDeepLink}/>;
       case "docs":       return <DocsMod currentUser={currentUser}/>;
-      case "salary":     return <SalaryMod currentUser={currentUser}/>;
+      case "salary":     return <SalaryMod currentUser={currentUser} deepLink={pendingDeepLink}/>;
       case "announce":   return <AnnMod currentUser={currentUser}/>;
       case "analytics":  return <AnalyticsMod currentUser={currentUser}/>;
       default:           return <DirectoryMod currentUser={currentUser} onCurrentUserUpdate={u=>{ localStorage.setItem("doloxe_user",JSON.stringify(u)); setCurrentUser(u); }}/>;
@@ -5750,7 +5863,7 @@ function HRApp() {
                               {!n.is_read && <span style={{ width:7, height:7, borderRadius:"50%", background:"var(--accent)", flexShrink:0 }}/>}
                               <span style={{ fontWeight:600, fontSize:13 }}>{n.title}</span>
                               <span style={{ fontSize:10, color:"var(--muted)", marginLeft:"auto", whiteSpace:"nowrap" }}>
-                                {n.type === "leave_request" ? "→ Leaves" : "→ Attendance"}
+                                {(NOTIF_DEST[n.type] || NOTIF_DEST.attendance_correction).page === "leaves" ? "→ Leaves" : "→ Attendance"}
                               </span>
                             </div>
                             <div style={{ fontSize:12, color:"var(--muted)", marginLeft: n.is_read ? 0 : 15 }}>{n.message}</div>
@@ -5798,7 +5911,7 @@ function HRApp() {
             <div key={grp}>
               <div className="sb-section-label">{grp}</div>
               {visiblePages.filter(p => p.grp === grp).map(p => (
-                <div key={p.id} className={`sb-item${page===p.id?" active":""}`} onClick={()=>{ localStorage.setItem("doloxe_page", p.id); setPage(p.id); setSidebarOpen(false); }}>
+                <div key={p.id} className={`sb-item${page===p.id?" active":""}`} onClick={()=>{ navigateToPage(p.id); setSidebarOpen(false); }}>
                   <Icon n={p.i} s={14}/>
                   <span style={{ flex:1 }}>{p.l}</span>
                 </div>
@@ -5861,7 +5974,6 @@ function HRApp() {
                   </>
                 )}
             </div>
-
           </div>
         </div>
       )}

@@ -340,6 +340,10 @@ attendance_corrections_table = Table(
     Column("emp_name", String(180), nullable=False),
     Column("date", Date, nullable=False),
     Column("reason", Text, nullable=False),
+    # The employee's claimed actual punch time(s) — what approval should write back to the
+    # attendance record. Either may be null (e.g. only the clock-out was missed).
+    Column("corrected_clock_in", String(10)),
+    Column("corrected_clock_out", String(10)),
     Column("status", String(20), nullable=False, default="pending"),  # pending|approved|rejected
     Column("requested_at", Date, nullable=False),
     Column("actioned_by", String(180)),
@@ -621,6 +625,20 @@ def init_database():
         except Exception:
             pass  # column already exists
 
+    # Migration: add corrected_clock_in/out columns to existing attendance_corrections tables
+    # (safe to run on every startup — create_all() only creates brand-new tables, it never
+    # alters ones that already exist, so this is the only way an already-deployed database
+    # picks up these columns).
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as _cc:
+        for _col in ("corrected_clock_in", "corrected_clock_out"):
+            try:
+                if IS_SQLITE:
+                    _cc.execute(text(f"ALTER TABLE hrms.attendance_corrections ADD COLUMN {_col} VARCHAR(10)"))
+                else:
+                    _cc.execute(text(f"ALTER TABLE hrms.attendance_corrections ADD {_col} VARCHAR(10)"))
+            except Exception:
+                pass  # column already exists
+
     now = datetime.utcnow()
     with engine.begin() as conn:
         existing = conn.execute(select(payroll_structure_table.c.id)).fetchall()
@@ -798,6 +816,8 @@ def fetch_payroll_runs():
     stmt = select(
         payroll_runs_table.c.id, payroll_runs_table.c.payroll_month,
         payroll_runs_table.c.status, payroll_runs_table.c.pay_date,
+        payroll_runs_table.c.payment_mode, payroll_runs_table.c.tax_regime,
+        payroll_runs_table.c.remarks,
         payroll_runs_table.c.processed_by, payroll_runs_table.c.processed_at,
         payroll_runs_table.c.created_at,
     ).order_by(
@@ -806,6 +826,44 @@ def fetch_payroll_runs():
     ).limit(50)
     with engine.begin() as conn:
         return rows_to_dicts(conn.execute(stmt))
+
+
+def upsert_payroll_run(payroll_month: date, *, status=None, pay_date=None,
+                        payment_mode=None, tax_regime=None, remarks=None, processed_by=None):
+    """Creates or updates the month-level payroll run record (status/pay date/etc.).
+    Keyed by payroll_month (one row per calendar month). Returns the saved row."""
+    now = datetime.utcnow()
+    with engine.begin() as conn:
+        existing = conn.execute(
+            select(payroll_runs_table).where(payroll_runs_table.c.payroll_month == payroll_month)
+        ).first()
+        vals = {"updated_at": now}
+        if status is not None:       vals["status"]        = status
+        if pay_date is not None:     vals["pay_date"]       = pay_date
+        if payment_mode is not None: vals["payment_mode"]   = payment_mode
+        if tax_regime is not None:   vals["tax_regime"]     = tax_regime
+        if remarks is not None:      vals["remarks"]        = remarks
+        if processed_by is not None:
+            vals["processed_by"] = processed_by
+            vals["processed_at"] = now
+        if existing:
+            conn.execute(
+                update(payroll_runs_table)
+                .where(payroll_runs_table.c.payroll_month == payroll_month)
+                .values(**vals)
+            )
+        else:
+            conn.execute(insert(payroll_runs_table).values(
+                payroll_month=payroll_month, status=status or "draft",
+                pay_date=pay_date, payment_mode=payment_mode or "Bank Transfer",
+                tax_regime=tax_regime or "New Regime", remarks=remarks,
+                processed_by=processed_by, processed_at=now if processed_by else None,
+                created_at=now, updated_at=now,
+            ))
+        row = conn.execute(
+            select(payroll_runs_table).where(payroll_runs_table.c.payroll_month == payroll_month)
+        ).first()
+    return {k: serialize(v) for k, v in row._mapping.items()}
 
 
 # ── Announcement queries ──────────────────────────────────────────────────────
@@ -1151,7 +1209,8 @@ def fetch_corrections(employee_id=None, status=None):
         return rows_to_dicts(conn.execute(stmt).fetchall())
 
 
-def create_correction(employee_id: str, emp_name: str, corr_date: date, reason: str):
+def create_correction(employee_id: str, emp_name: str, corr_date: date, reason: str,
+                       corrected_clock_in: str = None, corrected_clock_out: str = None):
     """Creates a new missed-punch correction request. Returns the created row."""
     now = datetime.utcnow()
     today = date.today()
@@ -1159,6 +1218,7 @@ def create_correction(employee_id: str, emp_name: str, corr_date: date, reason: 
         result = conn.execute(insert(attendance_corrections_table).values(
             employee_id=employee_id, emp_name=emp_name,
             date=corr_date, reason=reason,
+            corrected_clock_in=corrected_clock_in, corrected_clock_out=corrected_clock_out,
             status="pending", requested_at=today,
             created_at=now, updated_at=now,
         ))
